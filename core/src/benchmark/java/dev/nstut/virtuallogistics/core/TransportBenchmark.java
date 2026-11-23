@@ -1,6 +1,5 @@
 package dev.nstut.virtuallogistics.core;
 
-import java.lang.management.ManagementFactory;
 import java.util.List;
 import java.util.UUID;
 
