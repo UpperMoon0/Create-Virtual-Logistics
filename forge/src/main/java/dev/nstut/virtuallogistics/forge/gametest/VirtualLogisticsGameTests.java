@@ -570,4 +570,49 @@ public final class VirtualLogisticsGameTests {
         helper.succeed();
     }
 
+
+    /**
+     * This test distinguishes real immediate logical admission from the old
+     * 128-item/10-tick route queue. Storage can still fill later; the network
+     * must not reject or slow down in-flight logical packages.
+     */
+    @GameTest(template="empty",timeoutTicks=100)
+    public static void admitsTwoThousandPackagesDirectlyWithoutPhysicalCongestion(GameTestHelper helper) {
+        BlockPos source = new BlockPos(1,1,1);
+        BlockPos portPos = new BlockPos(2,1,1);
+        BlockPos motorPos = new BlockPos(1,0,1);
+        helper.setBlock(motorPos,AllBlocks.CREATIVE_MOTOR.getDefaultState()
+            .setValue(CreativeMotorBlock.FACING,Direction.UP));
+        helper.setBlock(source,AllBlocks.CHAIN_CONVEYOR.getDefaultState());
+        helper.setBlock(portPos,AllBlocks.PACKAGE_FROGPORT.getDefaultState());
+        var chain=(ChainConveyorBlockEntity)helper.getBlockEntity(source);
+        var port=(FrogportBlockEntity)helper.getBlockEntity(portPos);
+        var motor=(CreativeMotorBlockEntity)helper.getBlockEntity(motorPos);
+        motor.generatedSpeed.setValue(128);
+        motor.updateGeneratedRotation();
+        port.acceptsPackages=true;
+        port.addressFilter="fast-admission";
+        port.target=new PackagePortTarget.ChainConveyorFrogportTarget(
+            chain.getBlockPos().subtract(port.getBlockPos()),0,null);
+        port.target.register(port,helper.getLevel(),port.getBlockPos());
+        var current=VirtualLedger.get(helper.getLevel());
+        var sourceNode=new TransportGraph.Node(chain.getBlockPos().getX(),
+            chain.getBlockPos().getY(),chain.getBlockPos().getZ());
+        int beforePending=current.pending.size();
+        int beforeFlying=current.engine(sourceNode,helper.getLevel().getGameTime()).inFlight();
+        for(int i=0;i<2_000;i++) {
+            ItemStack cargo=PackageStyles.getDefaultBox();
+            PackageItem.addAddress(cargo,"fast-admission");
+            if(!chain.addLoopingPackage(new ChainConveyorPackage(0,cargo)))
+                helper.fail("Logical admission rejected cargo "+i);
+        }
+        helper.assertTrue(current.pending.size()==beforePending,
+            "Known route still throttled in old deferred queue");
+        helper.assertTrue(current.active.get(sourceNode).inFlight()==beforeFlying+2_000,
+            "2k packages not immediately admitted to physical-time flight");
+        helper.assertTrue(chain.getLoopingPackages().isEmpty(),
+            "Real Create package list grew under virtual load");
+        helper.succeed();
+    }
+
 }
