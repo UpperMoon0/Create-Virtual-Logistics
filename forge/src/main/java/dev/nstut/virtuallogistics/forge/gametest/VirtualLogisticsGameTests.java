@@ -243,10 +243,13 @@ public final class VirtualLogisticsGameTests {
     @GameTest(template="empty",timeoutTicks=40)
     public static void requiresPinnedFluidLogisticsWhenCompatibilityGateEnabled(GameTestHelper helper) {
         String requiredVersion = System.getProperty("cvl.requireFluidLogistics", "");
-        if (!requiredVersion.isEmpty()) {
-            var loaded = net.minecraftforge.fml.ModList.get()
-                .getModContainerById("fluidlogistics");
+        var loaded = net.minecraftforge.fml.ModList.get()
+            .getModContainerById("fluidlogistics");
+        if (!requiredVersion.isEmpty())
             helper.assertTrue(loaded.isPresent(), "Pinned Fluid Logistics not loaded in real Forge runtime");
+        if (loaded.isPresent()) {
+            helper.assertTrue(requiredVersion.equals("1.3.2"),
+                "Fluid Logistics loaded without the expected isolated compatibility gate");
             String actualVersion = loaded.orElseThrow().getModInfo().getVersion().toString();
             helper.assertTrue(actualVersion.equals(requiredVersion),
                 "Fluid Logistics release mismatch: expected " + requiredVersion +
