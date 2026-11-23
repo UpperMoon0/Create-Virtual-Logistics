@@ -1,5 +1,6 @@
 plugins {
     id 'eclipse'
+    id 'jacoco'
     id 'net.minecraftforge.gradle' version '[6.0,6.2)'
     id 'org.spongepowered.mixin' version '0.7.+'
     id 'org.parchmentmc.librarian.forgegradle' version '1.+'
@@ -28,9 +29,46 @@ minecraft {
             property 'forge.enabledGameTestNamespaces', 'createvirtuallogistics'
             if (fluidCompatibilityRun)
                 property 'cvl.requireFluidLogistics', '1.3.2'
+            if (project.findProperty('highVolumePackages') != null)
+                property 'cvl.highVolumePackages', project.property('highVolumePackages').toString()
+
         }
     }
 }
+
+jacoco { toolVersion = '0.8.12' }
+// ForgeGradle launches a custom run task, not a Gradle JavaExec.
+// Attach the agent explicitly only in the opt-in native GameTest run.
+tasks.register('nativeForgeCoverageReport', JacocoReport) {
+    group = 'verification'
+    description = 'Aggregate instrumented Forge GameTest adapter coverage (requires -PnativeCoverage=true).'
+    def base = layout.buildDirectory.file('jacoco/forge-base.exec')
+    def fluid = layout.buildDirectory.file('jacoco/forge-fluid.exec')
+    executionData.from(base, fluid)
+    sourceDirectories.from(layout.projectDirectory.dir('src/main/java'))
+    classDirectories.setFrom(files(sourceSets.main.output.classesDirs).asFileTree.matching {
+        exclude 'dev/nstut/virtuallogistics/core/**'
+        // GameTests compile in Forge's main source set, but test code is NOT
+        // production adapter coverage; excluding it prevents inflated results.
+        exclude 'dev/nstut/virtuallogistics/forge/gametest/**'
+    })
+    reports { xml.required = true; html.required = true }
+}
+
+
+afterEvaluate {
+    if (project.findProperty('nativeCoverage')?.toString() == 'true') {
+        // ForgeGradle configures its bundled maven repository late. Resolving
+        // JaCoCo while the run extension is declared breaks that setup.
+        def agent = configurations.jacocoRuntimeAgent.singleFile
+        def destination = layout.buildDirectory.file(
+            'jacoco/forge-' + (fluidCompatibilityRun ? 'fluid' : 'base') + '.exec').get().asFile
+        destination.parentFile.mkdirs()
+        minecraft.runs.gameTestServer.jvmArg(
+            "-javaagent:${agent.absolutePath}=destfile=${destination.absolutePath},append=false,dumponexit=true")
+    }
+}
+
 repositories {
     maven { url = 'https://repo.spongepowered.org/repository/maven-public/' }
     maven { url = 'https://cursemaven.com' }
@@ -38,7 +76,9 @@ repositories {
     maven { url = 'https://maven.createmod.net' }
     maven { url = 'https://maven.parchmentmc.org' }
 }
+configurations { jacocoRuntimeAgent }
 dependencies {
+    jacocoRuntimeAgent 'org.jacoco:org.jacoco.agent:0.8.12:runtime'
     minecraft 'net.minecraftforge:forge:' + minecraft_version + '-' + forge_version
     annotationProcessor 'org.spongepowered:mixin:0.8.7:processor'
     compileOnly(annotationProcessor('io.github.llamalad7:mixinextras-common:0.5.0-rc.3'))

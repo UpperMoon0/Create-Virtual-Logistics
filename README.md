@@ -38,6 +38,42 @@ enabled=true config; no live world config is altered.
 - Visual sample packets cap at 64 packages and at most 96 graph nodes each. Long routes remain server-authoritative but skip client rendering.
 - `/cvl export` writes an NBT copy under `world/cvl-recovery/` for offline audit. It never imports cargo or turns world and inventory saves into atomic transactions.
 
+## High-volume and coverage verification
+
+When a connected destination is already known, package admission now uses a
+20-tick per-source, per-address route cache (maximum 1024 entries per source) and
+promotes each captured package to in-flight transport immediately. The slower
+128-per-10-tick planner remains only for previously unresolved pending cargo.
+This is **logical route admission**, not unlimited source inventory extraction or
+physical inventory write throughput.
+
+A lean default Forge GameTest accepts 2,000 packages immediately, conserving
+their IDs while Create's physical conveyor list stays empty. The optional
+100,000-package **native** acceptance run is intentionally not part of every
+CI build:
+
+    ./gradlew -PhighVolumePackages=100000 :forge:runGameTestServer
+
+It verifies admission timing, full SavedData export/reload count conservation,
+and clean isolated world save/shutdown. A synthetic Java-only engine benchmark
+remains separate. Neither benchmark proves crash-safe transactionality, sustained
+Minecraft TPS/MSPT, client FPS or a baseline comparison with stock Create.
+
+The standalone core keeps 100% JaCoCo thresholds. Forge adapter integration
+coverage is collected separately using **real Forge game tests**, with the
+JaCoCo runtime agent opt-in to avoid adding overhead to regular dev runs:
+
+    ./gradlew -PnativeCoverage=true :forge:runGameTestServer
+    ./gradlew -PnativeCoverage=true -PwithFluidLogistics=true :forge:runGameTestServer
+    ./gradlew :forge:nativeForgeCoverageReport
+
+The production Forge report excludes GameTest implementation classes (which
+otherwise inflate results). Headless server tests do **not** exercise the client
+renderer, and mixin-injected production methods need explicit functional
+verification in addition to bytecode coverage. Both gaps remain acceptance
+work. Detailed release and crash-boundary matrix:
+[Production acceptance](docs/PRODUCTION_ACCEPTANCE.md).
+
 ## Build and test
 
 Requires JDK 17 (Forge 1.20.1).

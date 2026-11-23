@@ -223,8 +223,15 @@ public final class VirtualLogisticsGameTests {
             backup = dev.nstut.virtuallogistics.forge.VirtualLogisticsCommands
                 .exportSnapshot(helper.getLevel());
             helper.assertTrue(java.nio.file.Files.size(backup)>0, "Empty snapshot export");
+            int expectedCount = ledger.size();
+            long reloadStart = System.nanoTime();
             var restored = VirtualLedger.load(net.minecraft.nbt.NbtIo.readCompressed(
                 new java.io.FileInputStream(backup.toFile())));
+            long reloadNanos = System.nanoTime() - reloadStart;
+            System.out.printf("CVL native NBT restore: %d packages, %.3f ms%n",
+                expectedCount, reloadNanos/1e6);
+            helper.assertTrue(restored.size()==expectedCount,
+                "SavedData roundtrip lost or duplicated a shipment");
             helper.assertTrue(restored.pending.values().stream()
                 .anyMatch(p -> java.util.Arrays.equals(p.cargo(),unique)),
                 "Exported cargo was lost or modified");
@@ -568,6 +575,124 @@ public final class VirtualLogisticsGameTests {
         helper.assertTrue(!dev.nstut.virtuallogistics.forge.VirtualTransportService
             .insertFully(handler,box), "Full slot incorrectly accepted duplicate package");
         helper.succeed();
+    }
+
+
+    /**
+     * This test distinguishes real immediate logical admission from the old
+     * 128-item/10-tick route queue. Storage can still fill later; the network
+     * must not reject or slow down in-flight logical packages.
+     */
+    @GameTest(template="empty",timeoutTicks=100)
+    public static void admitsTwoThousandPackagesDirectlyWithoutPhysicalCongestion(GameTestHelper helper) {
+        BlockPos source = new BlockPos(1,1,1);
+        BlockPos portPos = new BlockPos(2,1,1);
+        BlockPos motorPos = new BlockPos(1,0,1);
+        helper.setBlock(motorPos,AllBlocks.CREATIVE_MOTOR.getDefaultState()
+            .setValue(CreativeMotorBlock.FACING,Direction.UP));
+        helper.setBlock(source,AllBlocks.CHAIN_CONVEYOR.getDefaultState());
+        helper.setBlock(portPos,AllBlocks.PACKAGE_FROGPORT.getDefaultState());
+        var chain=(ChainConveyorBlockEntity)helper.getBlockEntity(source);
+        var port=(FrogportBlockEntity)helper.getBlockEntity(portPos);
+        var motor=(CreativeMotorBlockEntity)helper.getBlockEntity(motorPos);
+        motor.generatedSpeed.setValue(128);
+        motor.updateGeneratedRotation();
+        port.acceptsPackages=true;
+        port.addressFilter="fast-admission";
+        port.target=new PackagePortTarget.ChainConveyorFrogportTarget(
+            chain.getBlockPos().subtract(port.getBlockPos()),0,null);
+        port.target.register(port,helper.getLevel(),port.getBlockPos());
+        var current=VirtualLedger.get(helper.getLevel());
+        var sourceNode=new TransportGraph.Node(chain.getBlockPos().getX(),
+            chain.getBlockPos().getY(),chain.getBlockPos().getZ());
+        int beforePending=current.pending.size();
+        int beforeFlying=current.engine(sourceNode,helper.getLevel().getGameTime()).inFlight();
+        int count = Integer.getInteger("cvl.highVolumePackages", 2_000);
+        helper.assertTrue(count >= 2_000 && count <= 100_000,
+            "Invalid optional high-volume native benchmark count");
+        long admissionStart = System.nanoTime();
+        for(int i=0;i<count;i++) {
+            ItemStack cargo=PackageStyles.getDefaultBox();
+            PackageItem.addAddress(cargo,"fast-admission");
+            if(!chain.addLoopingPackage(new ChainConveyorPackage(0,cargo)))
+                helper.fail("Logical admission rejected cargo "+i);
+        }
+        helper.assertTrue(current.pending.size()==beforePending,
+            "Known route still throttled in old deferred queue");
+        long elapsedNanos = System.nanoTime() - admissionStart;
+        System.out.printf("CVL native admission: %d packages, %.3f ms, %.0f packages/s%n",
+            count, elapsedNanos/1e6, count/(elapsedNanos/1e9));
+        helper.assertTrue(current.active.get(sourceNode).inFlight()==beforeFlying+count,
+            "Packages not immediately admitted to physical-time flight");
+        helper.assertTrue(chain.getLoopingPackages().isEmpty(),
+            "Real Create package list grew under virtual load");
+        helper.succeed();
+    }
+
+
+    @GameTest(template="empty",timeoutTicks=40)
+    public static void visualNetworkRoundTripAndBoundsCannotOverflowClient(GameTestHelper helper) {
+        try {
+            var node = new TransportGraph.Node(5,6,7);
+            var proxy = new dev.nstut.virtuallogistics.forge.CvlNetwork.Sample(
+                java.util.List.of(node), 0.75, 0.25);
+            var packet = new dev.nstut.virtuallogistics.forge.CvlNetwork.Visuals(
+                java.util.List.of(proxy));
+            var encoder = dev.nstut.virtuallogistics.forge.CvlNetwork.class.getDeclaredMethod(
+                "encode",dev.nstut.virtuallogistics.forge.CvlNetwork.Visuals.class,
+                net.minecraft.network.FriendlyByteBuf.class);
+            var decoder = dev.nstut.virtuallogistics.forge.CvlNetwork.class.getDeclaredMethod(
+                "decode",net.minecraft.network.FriendlyByteBuf.class);
+            encoder.setAccessible(true);
+            decoder.setAccessible(true);
+            var buffer=new net.minecraft.network.FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+            encoder.invoke(null,packet,buffer);
+            var recovered=(dev.nstut.virtuallogistics.forge.CvlNetwork.Visuals)
+                decoder.invoke(null,buffer);
+            helper.assertTrue(recovered.equals(packet),
+                "Visual serialization changed bounded location/movement");
+            boolean rejected=false;
+            try {
+                new dev.nstut.virtuallogistics.forge.CvlNetwork.Visuals(
+                    java.util.Collections.nCopies(65,proxy));
+            } catch(IllegalArgumentException e) { rejected=true; }
+            helper.assertTrue(rejected, "Server encoded more than 64 proxies");
+            rejected=false;
+            try {
+                new dev.nstut.virtuallogistics.forge.CvlNetwork.Sample(
+                    java.util.Collections.nCopies(97,node),0,0);
+            } catch(IllegalArgumentException e) { rejected=true; }
+            helper.assertTrue(rejected, "Server encoded oversized route");
+            rejected=false;
+            try {
+                new dev.nstut.virtuallogistics.forge.CvlNetwork.Sample(
+                    java.util.List.of(node),Double.NaN,0);
+            } catch(IllegalArgumentException e) { rejected=true; }
+            helper.assertTrue(rejected, "NaN visual movement was permitted");
+
+            var excessive=new net.minecraft.network.FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+            excessive.writeVarInt(65);
+            try {
+                decoder.invoke(null,excessive);
+                helper.fail("Client accepted oversized visual sample packet");
+            } catch(java.lang.reflect.InvocationTargetException expected) {
+                helper.assertTrue(expected.getCause() instanceof IllegalArgumentException,
+                    "Unexpected visual sample rejection");
+            }
+            var longRoute=new net.minecraft.network.FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+            longRoute.writeVarInt(1);
+            longRoute.writeVarInt(97);
+            try {
+                decoder.invoke(null,longRoute);
+                helper.fail("Client accepted oversized visual route packet");
+            } catch(java.lang.reflect.InvocationTargetException expected) {
+                helper.assertTrue(expected.getCause() instanceof IllegalArgumentException,
+                    "Unexpected visual route rejection");
+            }
+            helper.succeed();
+        } catch(ReflectiveOperationException error) {
+            helper.fail("Bounded visual serialization regression: " + error);
+        }
     }
 
 }

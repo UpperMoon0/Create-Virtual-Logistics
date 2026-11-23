@@ -37,10 +37,25 @@ public final class VirtualLedger extends SavedData {
             "create_virtual_logistics");
     }
 
-    public void capture(TransportGraph.Node start, byte[] cargo) {
+    public UUID capture(TransportGraph.Node start, byte[] cargo) {
         UUID id = UUID.randomUUID();
         pending.put(id, new Pending(id, start, cargo));
         setDirty();
+        return id;
+    }
+
+    /** Transfer a captured shipment from pending to in-flight in the SAME SavedData.
+     *  No physical inventory is altered and no parcel is made more than once. */
+    public boolean promote(UUID id, TransportGraph.Route route, long nowTick) {
+        Pending item = pending.get(id);
+        if (item == null) return false;
+        var engine = engine(item.source(), nowTick);
+        engine.submit(new VirtualTransportEngine.Shipment(id, item.cargo(), route,
+            engine.odometer() + route.distance(),
+            VirtualTransportEngine.Status.IN_TRANSIT, 0));
+        pending.remove(id);
+        setDirty();
+        return true;
     }
 
     public void quarantine(Pending pending, String reason) {
@@ -109,6 +124,10 @@ public final class VirtualLedger extends SavedData {
                 ledger.quarantineRaw(item, "Malformed pending NBT: " + error.getClass().getSimpleName());
             }
         }
+        // A linear scan for duplicate IDs on each shipment makes loading N
+        // packages O(N²). Keep one identity set across ALL source engines.
+        final java.util.Set<UUID> seenShipmentIds =
+            new java.util.HashSet<>(ledger.pending.keySet());
         for (Tag raw : tag.getList("Engines", Tag.TAG_COMPOUND)) {
             CompoundTag entry = (CompoundTag)raw;
             TransportGraph.Node source = readNode(entry.getCompound("Source"));
@@ -128,8 +147,7 @@ public final class VirtualLedger extends SavedData {
                         payload.getByteArray("Cargo"), route, payload.getDouble("Arrival"),
                         VirtualTransportEngine.Status.valueOf(payload.getString("Status")),
                         payload.getLong("RetryTick"));
-                    if (ledger.pending.containsKey(shipment.id())
-                        || shipments.stream().anyMatch(saved -> saved.id().equals(shipment.id())))
+                    if (!seenShipmentIds.add(shipment.id()))
                         throw new IllegalArgumentException("Duplicate shipment ID");
                     shipments.add(shipment);
                 } catch (RuntimeException failure) {
