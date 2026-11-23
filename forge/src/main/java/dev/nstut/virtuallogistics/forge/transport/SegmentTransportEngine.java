@@ -34,10 +34,15 @@ public final class SegmentTransportEngine {
     public enum State { IN_TRANSIT, AT_SOURCE, WAITING_FOR_STORAGE }
 
     /** A route with positive-distance physical legs; the final leg ends at its Frogport. */
-    public record Path(List<TransportGraph.Node> points, List<Double> lengths) {
+    public record Path(List<TransportGraph.Node> points, List<Double> lengths,
+                       String destinationAddress) {
+        public Path(List<TransportGraph.Node> points, List<Double> lengths) {
+            this(points,lengths,"");
+        }
         public Path {
             points = List.copyOf(points);
             lengths = List.copyOf(lengths);
+            Objects.requireNonNull(destinationAddress);
             if (points.size() < 2 || lengths.size() != points.size()-1)
                 throw new IllegalArgumentException("Route must contain one or more segments");
             for (int i=0;i<lengths.size();i++) {
@@ -45,6 +50,23 @@ public final class SegmentTransportEngine {
                 if (!Double.isFinite(distance) || distance <= 0)
                     throw new IllegalArgumentException("Invalid segment distance");
             }
+        }
+        public static Path fromCreateRoute(TransportGraph.Route route) {
+            List<TransportGraph.Node> points=new ArrayList<>(route.nodes());
+            if(!points.get(points.size()-1).equals(route.endpoint().port()))
+                points.add(route.endpoint().port());
+            List<Double> lengths=new ArrayList<>(points.size()-1);
+            for(int i=0;i+1<points.size();i++)
+                lengths.add(points.get(i).distanceTo(points.get(i+1)));
+            return new Path(points,lengths,route.endpoint().address());
+        }
+        /** Reconstruct authoritative Create route for current physical validation. */
+        public TransportGraph.Route toCreateRoute() {
+            List<TransportGraph.Node> nodes=points.subList(0,points.size()-1);
+            TransportGraph.Node last=nodes.get(nodes.size()-1);
+            var endpoint=new TransportGraph.Endpoint(last,
+                points.get(points.size()-1), destinationAddress);
+            return new TransportGraph.Route(nodes,endpoint,totalDistance());
         }
         public int legs() { return lengths.size(); }
         public TransportGraph.Node source(int leg) { return points.get(leg); }
@@ -343,6 +365,12 @@ public final class SegmentTransportEngine {
         }
         return List.copyOf(selected);
     }
+    public int leg(UUID id) {
+        Cursor item=cargo.get(id);
+        if(item==null)throw new IllegalArgumentException("Unknown cargo");
+        return item.leg;
+    }
+
     public double traveled(UUID id) {
         Cursor item=cargo.get(id);
         if(item==null)throw new IllegalArgumentException("Unknown cargo");
