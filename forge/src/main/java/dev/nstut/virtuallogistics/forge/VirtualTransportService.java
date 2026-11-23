@@ -317,7 +317,10 @@ public final class VirtualTransportService {
                 }
             }
             if (insertFully(frogport.inventory, cargo)) {
-                frogport.notifyUpdate();
+                // The item is already in the authoritative recipient slot.
+                // A renderer/notification failure must not requeue cargo.
+                try { frogport.notifyUpdate(); }
+                catch (RuntimeException ignored) { /* receipt already committed in memory */ }
                 return true;
             }
         } catch (IOException ignored) {
@@ -357,15 +360,30 @@ public final class VirtualTransportService {
         return true;
     }
 
-    private static boolean insertFully(IItemHandler handler, ItemStack stack) {
-        // Create packages are non-stackable. A single-item slot insertion cannot partially
-        // succeed, even if a neighbouring mod changes its handler between simulate/execute.
+    /**
+     * Main-thread nonstacking slot insertion. Recover a post-mutation handler
+     * exception by inspecting the originally empty slot before replaying it.
+     * This prevents an exception-induced duplicate in one process, NOT a
+     * durability guarantee across independent region/SavedData crash saves.
+     */
+    public static boolean insertFully(IItemHandler handler, ItemStack stack) {
         if (stack.isEmpty() || stack.getCount() != 1) return false;
         for (int slot = 0; slot < handler.getSlots(); slot++) {
-            if (!handler.isItemValid(slot, stack)) continue;
-            ItemStack simulated = handler.insertItem(slot, stack.copy(), true);
-            if (!simulated.isEmpty()) continue;
-            return handler.insertItem(slot, stack.copy(), false).isEmpty();
+            // Only choose an empty slot: a thrown callback can then be resolved
+            // unambiguously even for identical nonstackable packages.
+            if (!handler.getStackInSlot(slot).isEmpty() || !handler.isItemValid(slot, stack))
+                continue;
+            if (!handler.insertItem(slot, stack.copy(), true).isEmpty()) continue;
+            try {
+                if (handler.insertItem(slot, stack.copy(), false).isEmpty()) return true;
+            } catch (RuntimeException postCommit) {
+                // The handler may have inserted successfully before its callback
+                // failed. Never count that as rejection and insert it a second time.
+                ItemStack now = handler.getStackInSlot(slot);
+                if (now.getCount() == 1 && ItemStack.isSameItemSameTags(now, stack))
+                    return true;
+                throw postCommit;
+            }
         }
         return false;
     }
