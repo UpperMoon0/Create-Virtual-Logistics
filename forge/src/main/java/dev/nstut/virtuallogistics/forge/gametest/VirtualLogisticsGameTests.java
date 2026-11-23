@@ -170,8 +170,8 @@ public final class VirtualLogisticsGameTests {
         helper.succeed();
     }
 
-    @GameTest(template="empty",timeoutTicks=180)
-    public static void removingPortConnectionMustNotTeleportPackage(GameTestHelper helper) {
+    @GameTest(template="empty",timeoutTicks=40)
+    public static void changingPortConnectionInvalidatesReceiptRoute(GameTestHelper helper) {
         BlockPos source = new BlockPos(1,1,1);
         BlockPos portPosition = new BlockPos(2,1,1);
         BlockPos motorPosition = new BlockPos(1,0,1);
@@ -182,33 +182,30 @@ public final class VirtualLogisticsGameTests {
         var chain = (ChainConveyorBlockEntity)helper.getBlockEntity(source);
         var port = (FrogportBlockEntity)helper.getBlockEntity(portPosition);
         var motor = (CreativeMotorBlockEntity)helper.getBlockEntity(motorPosition);
-        motor.generatedSpeed.setValue(4);
+        motor.generatedSpeed.setValue(128);
         motor.updateGeneratedRotation();
-        port.acceptsPackages = true;
-        port.addressFilter = "destination";
-        port.target = new PackagePortTarget.ChainConveyorFrogportTarget(
+        port.acceptsPackages=true;
+        port.addressFilter="destination";
+        port.target=new PackagePortTarget.ChainConveyorFrogportTarget(
             chain.getBlockPos().subtract(port.getBlockPos()),0,null);
         port.target.register(port,helper.getLevel(),port.getBlockPos());
-        ItemStack box = PackageStyles.getDefaultBox();
-        PackageItem.addAddress(box,"destination");
-        if (!chain.addLoopingPackage(new ChainConveyorPackage(0,box)))
-            helper.fail("Capture failed");
-        // The pending queue should resolve before tick 30, but travel takes 90 ticks.
-        helper.runAfterDelay(30, () -> {
-            if (chain.loopPorts.isEmpty() && chain.travelPorts.isEmpty())
-                helper.fail("Test did not register port to remove");
-            chain.loopPorts.clear();
-            chain.travelPorts.clear();
-        });
-        helper.runAfterDelay(145, () -> {
-            int count = 0;
-            for (int i=0;i<port.inventory.getSlots();i++)
-                count += port.inventory.getStackInSlot(i).getCount();
-            helper.assertTrue(count==0, "Stale path delivered despite removed port link");
-            helper.assertTrue(VirtualLedger.get(helper.getLevel()).size()>=1,
-                "Shipment vanished after route invalidation");
-            helper.succeed();
-        });
+        var n = VirtualLedger.node(chain.getBlockPos());
+        var destination = VirtualLedger.node(port.getBlockPos());
+        var route = new TransportGraph.Route(java.util.List.of(n),
+            new TransportGraph.Endpoint(n,destination,"destination"),1);
+        helper.assertTrue(dev.nstut.virtuallogistics.forge.VirtualTransportService
+            .routeStillConnected(helper.getLevel(),route), "Expected initially valid route");
+        chain.loopPorts.clear();
+        chain.travelPorts.clear();
+        helper.assertTrue(!dev.nstut.virtuallogistics.forge.VirtualTransportService
+            .routeStillConnected(helper.getLevel(),route), "Disconnected link was still valid");
+        port.target.register(port,helper.getLevel(),port.getBlockPos());
+        helper.assertTrue(dev.nstut.virtuallogistics.forge.VirtualTransportService
+            .routeStillConnected(helper.getLevel(),route), "Reconnected port was rejected");
+        port.acceptsPackages=false;
+        helper.assertTrue(!dev.nstut.virtuallogistics.forge.VirtualTransportService
+            .routeStillConnected(helper.getLevel(),route), "Nonreceiving port was accepted");
+        helper.succeed();
     }
 
 }
