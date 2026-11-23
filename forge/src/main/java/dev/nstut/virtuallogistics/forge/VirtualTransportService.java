@@ -243,6 +243,10 @@ public final class VirtualTransportService {
 
     private static TransportGraph graph(ServerLevel level, TransportGraph.Node source, long tick) {
         Map<TransportGraph.Node, CachedGraph> cache = GRAPHS.computeIfAbsent(level, ignored -> new HashMap<>());
+        // Source locations are not immortal. Purge expired graph snapshots so
+        // builds/demolitions do not accumulate an unbounded pathfinding cache.
+        if (tick % 1200 == 0)
+            cache.entrySet().removeIf(entry -> entry.getValue().expiresTick() <= tick);
         CachedGraph stored = cache.get(source);
         if (stored != null && tick < stored.expiresTick()) return stored.graph();
 
@@ -264,9 +268,14 @@ public final class VirtualTransportService {
                 BlockEntity neighbour = level.getBlockEntity(other);
                 if (!(neighbour instanceof ChainConveyorBlockEntity target)
                     || !target.connections.contains(offset.multiply(-1))) continue;
-                graph.connect(pos,VirtualLedger.node(other),
-                    Math.max(0.01, Math.sqrt(offset.distSqr(BlockPos.ZERO))));
-                if (!seen.contains(VirtualLedger.node(other))) queue.add(VirtualLedger.node(other));
+                var neighbourNode = VirtualLedger.node(other);
+                // Every physical connection is represented from both ends in
+                // Create. Register each undirected edge once to avoid doubled
+                // adjacency lists and unnecessary Dijkstra heap work.
+                if (pos.compareTo(neighbourNode) < 0)
+                    graph.connect(pos, neighbourNode,
+                        Math.max(0.01, Math.sqrt(offset.distSqr(BlockPos.ZERO))));
+                if (!seen.contains(neighbourNode)) queue.add(neighbourNode);
             }
             for (BlockPos offset : conveyor.loopPorts.keySet())
                 registerPort(level, graph, pos, physical.offset(offset));
