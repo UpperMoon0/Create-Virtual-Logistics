@@ -254,7 +254,7 @@ public final class VirtualTransportService {
      * Validate loaded infrastructure without chunk generation or forced loads.
      * This is not yet a per-segment speed or topology-revision simulation.
      */
-    private static boolean routeStillConnected(ServerLevel level, TransportGraph.Route route) {
+    public static boolean routeStillConnected(ServerLevel level, TransportGraph.Route route) {
         List<TransportGraph.Node> path = route.nodes();
         for (int i = 0; i < path.size(); i++) {
             BlockPos pos = VirtualLedger.block(path.get(i));
@@ -271,6 +271,10 @@ public final class VirtualTransportService {
                 BlockPos port = VirtualLedger.block(route.endpoint().port());
                 BlockPos offset = port.subtract(pos);
                 if (!chain.loopPorts.containsKey(offset) && !chain.travelPorts.containsKey(offset))
+                    return false;
+                if (!level.hasChunkAt(port)
+                    || !(level.getBlockEntity(port) instanceof FrogportBlockEntity destination)
+                    || !destination.acceptsPackages || destination.target == null)
                     return false;
             }
         }
