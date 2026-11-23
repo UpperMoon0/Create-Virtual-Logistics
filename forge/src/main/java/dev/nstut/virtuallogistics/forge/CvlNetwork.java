@@ -19,6 +19,7 @@ import java.util.function.Supplier;
 public final class CvlNetwork {
     private static final String VERSION = "1";
     public static final int MAX_VISUAL_ROUTE_NODES = 96;
+    public static final int MAX_VISUAL_SAMPLES = 64;
     private static final SimpleChannel CHANNEL = NetworkRegistry.ChannelBuilder
         .named(new ResourceLocation(VirtualLogisticsMod.ID, "visual"))
         .networkProtocolVersion(() -> VERSION)
@@ -49,7 +50,7 @@ public final class CvlNetwork {
     }
     private static Visuals decode(FriendlyByteBuf buffer) {
         int count = buffer.readVarInt();
-        if (count < 0 || count > 256) throw new IllegalArgumentException("Invalid visual count");
+        if (count < 0 || count > MAX_VISUAL_SAMPLES) throw new IllegalArgumentException("Invalid visual count");
         List<Sample> list = new ArrayList<>(count);
         for (int i=0;i<count;i++) {
             int size = buffer.readVarInt();
