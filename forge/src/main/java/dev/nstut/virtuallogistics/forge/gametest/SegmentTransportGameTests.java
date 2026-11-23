@@ -89,7 +89,7 @@ public final class SegmentTransportGameTests {
         helper.assertTrue(engine.traveled(blocked)==0,"Broken path advanced across disconnected chain");
         helper.assertTrue(engine.traveled(unaffected)==5,
             "Independent physical chain stopped because another route is broken");
-        engine.advance(15,(p,leg)-> path.equals(PATH) ? 0 : 360, path->true);
+        engine.advance(15,(p,leg)-> p.equals(PATH) ? 0 : 360, path->true);
         helper.assertTrue(engine.traveled(blocked)==0,"Stopped motor advanced cargo");
         helper.assertTrue(engine.deliver(15,2,10,s->true).delivered()==1,
             "Unrelated route did not finish at tick ten");
