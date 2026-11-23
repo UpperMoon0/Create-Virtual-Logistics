@@ -162,6 +162,7 @@ public final class SegmentTransportEngine {
     }
 
     private final Map<UUID,Cursor> cargo=new LinkedHashMap<>();
+    private final Map<Path,Integer> routeReferences=new HashMap<>();
     private final Map<Path,RouteState> routes=new HashMap<>();
     private final Set<UUID> transit=new LinkedHashSet<>();
     private final Set<UUID> ready=new LinkedHashSet<>();
@@ -183,6 +184,7 @@ public final class SegmentTransportEngine {
             throw new IllegalArgumentException("Duplicate cargo identity");
         var cursor=new Cursor(shipment);
         cargo.put(cursor.id,cursor);
+        routeReferences.merge(cursor.route,1,Integer::sum);
         RouteState state=routes.computeIfAbsent(cursor.route,RouteState::new);
         switch(cursor.state) {
             case IN_TRANSIT -> {
@@ -315,18 +317,14 @@ public final class SegmentTransportEngine {
             if(accepted) {
                 cargo.remove(id);
                 ready.remove(id);
+                routeReferences.compute(item.route,(route,count)->count==1?null:count-1);
+                if(!routeReferences.containsKey(item.route)) routes.remove(item.route);
                 delivered++;
             } else {
                 item.retryTick=nowTick+retryTicks;
                 retry.computeIfAbsent(item.retryTick,ignored->new LinkedHashSet<>()).add(id);
             }
         }
-        // Discard idle route clocks only when ALL shipment state is gone.
-        if(!cargo.isEmpty()) {
-            var livePaths=new HashSet<Path>();
-            for(var item:cargo.values()) livePaths.add(item.route);
-            routes.keySet().retainAll(livePaths);
-        } else routes.clear();
         return new DeliveryReport(attempts,delivered);
     }
 
@@ -337,6 +335,7 @@ public final class SegmentTransportEngine {
 
     public List<Cargo> sample(int limit) {
         if(limit<0)throw new IllegalArgumentException("Negative render cap");
+        if(limit==0)return List.of();
         List<Cargo> selected=new ArrayList<>(Math.min(limit,transit.size()));
         for(UUID id:transit) {
             selected.add(cargo.get(id).snapshot());
