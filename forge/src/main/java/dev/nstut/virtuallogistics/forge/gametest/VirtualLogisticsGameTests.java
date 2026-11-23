@@ -477,4 +477,71 @@ public final class VirtualLogisticsGameTests {
         helper.succeed();
     }
 
+
+    @GameTest(template="empty",timeoutTicks=100)
+    public static void fluidLogisticsUnpacksVirtualCargoIntoRealCreateTank(GameTestHelper helper) {
+        if (!net.minecraftforge.fml.ModList.get().isLoaded("fluidlogistics")) {
+            helper.succeed();
+            return;
+        }
+        BlockPos chainPos = new BlockPos(1,1,1);
+        BlockPos tankPos = new BlockPos(2,1,1);
+        helper.setBlock(chainPos,AllBlocks.CHAIN_CONVEYOR.getDefaultState());
+        helper.setBlock(tankPos,AllBlocks.FLUID_TANK.getDefaultState());
+        helper.runAfterDelay(10,() -> {
+            var chain = (ChainConveyorBlockEntity)helper.getBlockEntity(chainPos);
+            var tank = helper.getBlockEntity(tankPos);
+            var ledger = VirtualLedger.get(helper.getLevel());
+            var before = new java.util.HashSet<>(ledger.pending.keySet());
+            try {
+                var helperType = Class.forName(
+                    "com.yision.fluidlogistics.content.logistics.fluidPackage.FluidPackageContentHelper");
+                var create = helperType.getMethod(
+                    "createCanonicalPackage",net.minecraftforge.fluids.FluidStack.class);
+                var water = new net.minecraftforge.fluids.FluidStack(
+                    net.minecraft.world.level.material.Fluids.WATER,1000);
+                ItemStack box=(ItemStack)create.invoke(null,water);
+                PackageItem.addAddress(box,"0_hno3");
+                PackageItem.setOrder(box,4402,3,true,0,true,null);
+                if (!chain.addLoopingPackage(new ChainConveyorPackage(0,box)))
+                    helper.fail("Real fluid package was refused by virtual conveyor");
+                var captured = ledger.pending.values().stream()
+                    .filter(p -> !before.contains(p.id())).findFirst().orElseThrow();
+                ItemStack received = ItemStack.of(net.minecraft.nbt.NbtIo.readCompressed(
+                    new java.io.ByteArrayInputStream(captured.cargo())));
+                var contextType = Class.forName(
+                    "com.yision.fluidlogistics.api.packager.PackageUnpackContext");
+                var ctx = contextType.getConstructor(net.minecraft.world.level.Level.class,
+                    BlockPos.class,net.minecraft.world.level.block.state.BlockState.class,
+                    net.minecraft.world.level.block.entity.BlockEntity.class,
+                    Direction.class,ItemStack.class,
+                    com.simibubi.create.content.logistics.stockTicker.PackageOrderWithCrafts.class)
+                    .newInstance(helper.getLevel(),tank.getBlockPos(),tank.getBlockState(),
+                        tank,Direction.UP,received,null);
+                var resources = Class.forName(
+                    "com.yision.fluidlogistics.api.packager.PackageResources");
+                var unpack = resources.getMethod("unpackPackageResult",contextType,boolean.class);
+                var handler = tank.getCapability(net.minecraftforge.common.capabilities.ForgeCapabilities.FLUID_HANDLER,
+                    Direction.UP).resolve().orElseThrow();
+                int beforeAmount = handler.getFluidInTank(0).getAmount();
+                Object simulated = unpack.invoke(null,ctx,true);
+                int offered = (int)simulated.getClass().getMethod("transferred").invoke(simulated);
+                helper.assertTrue(offered==1000
+                    && handler.getFluidInTank(0).getAmount()==beforeAmount,
+                    "Fluid Logistics simulation must neither refuse nor mutate real tank");
+                Object executed=unpack.invoke(null,ctx,false);
+                int inserted=(int)executed.getClass().getMethod("transferred").invoke(executed);
+                boolean complete=(boolean)executed.getClass().getMethod("complete").invoke(executed);
+                helper.assertTrue(inserted==1000 && complete,
+                    "Real fluid package did not completely unpack");
+                helper.assertTrue(handler.getFluidInTank(0).getAmount()==beforeAmount+1000
+                    && handler.getFluidInTank(0).isFluidEqual(water),
+                    "Real Create tank did not receive conserved fluid amount");
+                helper.succeed();
+            } catch (ReflectiveOperationException | java.io.IOException error) {
+                helper.fail("Real Fluid Logistics unpacking failed: "+error);
+            }
+        });
+    }
+
 }
