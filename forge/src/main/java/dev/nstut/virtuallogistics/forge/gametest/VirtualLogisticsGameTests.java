@@ -426,4 +426,55 @@ public final class VirtualLogisticsGameTests {
         helper.succeed();
     }
 
+
+    @GameTest(template="empty",timeoutTicks=60)
+    public static void mixedRpmOnConnectedChainCannotFastForwardCargo(GameTestHelper helper) {
+        BlockPos first = new BlockPos(1,1,1);
+        BlockPos second = new BlockPos(5,1,1);
+        BlockPos portPos = new BlockPos(6,1,1);
+        BlockPos motorA = new BlockPos(1,0,1);
+        BlockPos motorB = new BlockPos(5,0,1);
+        helper.setBlock(motorA,AllBlocks.CREATIVE_MOTOR.getDefaultState()
+            .setValue(CreativeMotorBlock.FACING,Direction.UP));
+        helper.setBlock(motorB,AllBlocks.CREATIVE_MOTOR.getDefaultState()
+            .setValue(CreativeMotorBlock.FACING,Direction.UP));
+        helper.setBlock(first,AllBlocks.CHAIN_CONVEYOR.getDefaultState());
+        helper.setBlock(second,AllBlocks.CHAIN_CONVEYOR.getDefaultState());
+        helper.setBlock(portPos,AllBlocks.PACKAGE_FROGPORT.getDefaultState());
+        var chainA=(ChainConveyorBlockEntity)helper.getBlockEntity(first);
+        var chainB=(ChainConveyorBlockEntity)helper.getBlockEntity(second);
+        var port=(FrogportBlockEntity)helper.getBlockEntity(portPos);
+        var driveA=(CreativeMotorBlockEntity)helper.getBlockEntity(motorA);
+        var driveB=(CreativeMotorBlockEntity)helper.getBlockEntity(motorB);
+        driveA.generatedSpeed.setValue(128);
+        driveA.updateGeneratedRotation();
+        driveB.generatedSpeed.setValue(64);
+        driveB.updateGeneratedRotation();
+        var gap = chainB.getBlockPos().subtract(chainA.getBlockPos());
+        chainA.connections.add(gap);
+        chainB.connections.add(gap.multiply(-1));
+        port.acceptsPackages = true;
+        port.addressFilter = "two-speed";
+        port.target = new PackagePortTarget.ChainConveyorFrogportTarget(
+            chainB.getBlockPos().subtract(port.getBlockPos()),0,null);
+        port.target.register(port,helper.getLevel(),port.getBlockPos());
+        var start=new TransportGraph.Node(chainA.getBlockPos().getX(),
+            chainA.getBlockPos().getY(),chainA.getBlockPos().getZ());
+        var end=new TransportGraph.Node(chainB.getBlockPos().getX(),
+            chainB.getBlockPos().getY(),chainB.getBlockPos().getZ());
+        var destination=new TransportGraph.Node(port.getBlockPos().getX(),
+            port.getBlockPos().getY(),port.getBlockPos().getZ());
+        var route=new TransportGraph.Route(java.util.List.of(start,end),
+            new TransportGraph.Endpoint(end,destination,"two-speed"),5);
+        var engine=new dev.nstut.virtuallogistics.core.VirtualTransportEngine(0);
+        engine.submit(new byte[]{1},route);
+        helper.assertTrue(dev.nstut.virtuallogistics.forge.VirtualTransportService
+            .routeStillConnected(helper.getLevel(),route),
+            "Test setup must register a real connected two-segment route");
+        helper.assertTrue(dev.nstut.virtuallogistics.forge.VirtualTransportService
+            .effectiveRpm(helper.getLevel(),engine)==0,
+            "Different node RPMs incorrectly advanced common source clock");
+        helper.succeed();
+    }
+
 }
