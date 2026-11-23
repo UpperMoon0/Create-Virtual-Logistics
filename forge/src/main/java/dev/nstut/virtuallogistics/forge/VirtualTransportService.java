@@ -41,6 +41,9 @@ public final class VirtualTransportService {
     private static final int MAX_GRAPH_NODES = 8192;
     private static final int PENDING_BUDGET_PER_TICK = 128;
     private static final int RETRY_TICKS = 20;
+    private static final int MAX_CARGO_BYTES = 2 * 1024 * 1024;
+    private static final long MAX_UNCOMPRESSED_NBT_BYTES = 8L * 1024 * 1024;
+    private static final Map<ServerLevel, Integer> NEXT_SOURCE = new WeakHashMap<>();
     private record CachedGraph(TransportGraph graph, long expiresTick) {}
     private static final Map<ServerLevel, Map<TransportGraph.Node, CachedGraph>> GRAPHS = new WeakHashMap<>();
 
@@ -53,7 +56,7 @@ public final class VirtualTransportService {
         try {
             // The serialized ItemStack, including fluid, fragment and order metadata, is owned by the ledger.
             byte[] cargo = encode(packageToMove.item);
-            if (cargo.length > 2 * 1024 * 1024) return false;
+            if (cargo.length > MAX_CARGO_BYTES) return false;
             VirtualLedger.get(level).capture(VirtualLedger.node(origin.getBlockPos()), cargo);
             return true;
         } catch (IOException e) {
@@ -68,7 +71,18 @@ public final class VirtualTransportService {
     }
 
     static ItemStack decode(byte[] bytes) throws IOException {
-        return ItemStack.of(NbtIo.readCompressed(new ByteArrayInputStream(bytes)));
+        if (bytes == null || bytes.length == 0 || bytes.length > MAX_CARGO_BYTES)
+            throw new IOException("Invalid compressed shipment size");
+        try {
+            ItemStack cargo = ItemStack.of(NbtIo.readCompressed(
+                new ByteArrayInputStream(bytes),
+                net.minecraft.nbt.NbtAccounter.create(MAX_UNCOMPRESSED_NBT_BYTES)));
+            if (cargo.isEmpty() || !PackageItem.isPackage(cargo) || cargo.getCount() != 1)
+                throw new IOException("Shipment no longer contains exactly one Create package");
+            return cargo;
+        } catch (RuntimeException malformed) {
+            throw new IOException("Malformed or oversized shipment payload", malformed);
+        }
     }
 
     public static void onServerTick(TickEvent.ServerTickEvent event) {
@@ -90,21 +104,37 @@ public final class VirtualTransportService {
             }
             ledger.restoreEngines(now);
             routePending(level, ledger, now);
-            int left = VirtualLogisticsMod.DELIVERY_BUDGET.get();
-            // Advance every source clock, including sources whose deliveries are budget-deferred.
-            for (var entry : ledger.active.entrySet()) {
-                var block = level.hasChunkAt(VirtualLedger.block(entry.getKey()))
-                    ? level.getBlockEntity(VirtualLedger.block(entry.getKey())) : null;
-                // Reverse rotation must not advance shipments toward the sink.
+            // Advance every source clock even when the global delivery budget is
+            // exhausted, and persist updated clocks for correct save/reload.
+            var sources = new ArrayList<>(ledger.active.entrySet());
+            sources.sort(Map.Entry.comparingByKey());
+            for (var entry : sources) {
+                var pos = VirtualLedger.block(entry.getKey());
+                var block = level.hasChunkAt(pos) ? level.getBlockEntity(pos) : null;
                 double rpm = block instanceof ChainConveyorBlockEntity conveyor
                     ? Math.max(0, conveyor.getSpeed()) : 0;
+                double previousOdometer = entry.getValue().odometer();
                 entry.getValue().clock(now, rpm);
-                if (left > 0) {
-                    var report = entry.getValue().deliverReady(now, left, RETRY_TICKS,
+                if (previousOdometer != entry.getValue().odometer()) ledger.setDirty();
+            }
+            // Round-robin across powered sources. Never let one busy source starve
+            // another just because HashMap iteration picks it first every tick.
+            int left = VirtualLogisticsMod.DELIVERY_BUDGET.get();
+            if (!sources.isEmpty()) {
+                int start = Math.floorMod(NEXT_SOURCE.getOrDefault(level, 0), sources.size());
+                int processedSources = 0;
+                for (int i = 0; i < sources.size() && left > 0; i++) {
+                    var entry = sources.get((start + i) % sources.size());
+                    // The minimum reservation of one attempt per ready source keeps
+                    // the shared budget fair; unused attempts are not wasted.
+                    int sourceBudget = Math.max(1, left / (sources.size() - i));
+                    var report = entry.getValue().deliverReady(now, sourceBudget, RETRY_TICKS,
                         shipment -> deliver(level, shipment));
                     left -= report.attempted();
+                    processedSources++;
                     if (report.attempted() > 0) ledger.setDirty();
                 }
+                NEXT_SOURCE.put(level, (start + Math.max(1, processedSources)) % sources.size());
             }
             if (now % 10 == 0) sendVisuals(level, ledger);
         }
