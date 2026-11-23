@@ -37,10 +37,25 @@ public final class VirtualLedger extends SavedData {
             "create_virtual_logistics");
     }
 
-    public void capture(TransportGraph.Node start, byte[] cargo) {
+    public UUID capture(TransportGraph.Node start, byte[] cargo) {
         UUID id = UUID.randomUUID();
         pending.put(id, new Pending(id, start, cargo));
         setDirty();
+        return id;
+    }
+
+    /** Transfer a captured shipment from pending to in-flight in the SAME SavedData.
+     *  No physical inventory is altered and no parcel is made more than once. */
+    public boolean promote(UUID id, TransportGraph.Route route, long nowTick) {
+        Pending item = pending.get(id);
+        if (item == null) return false;
+        var engine = engine(item.source(), nowTick);
+        engine.submit(new VirtualTransportEngine.Shipment(id, item.cargo(), route,
+            engine.odometer() + route.distance(),
+            VirtualTransportEngine.Status.IN_TRANSIT, 0));
+        pending.remove(id);
+        setDirty();
+        return true;
     }
 
     public void quarantine(Pending pending, String reason) {
