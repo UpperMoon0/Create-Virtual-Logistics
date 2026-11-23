@@ -258,4 +258,69 @@ public final class VirtualLogisticsGameTests {
         helper.succeed();
     }
 
+
+    @GameTest(template="empty",timeoutTicks=80)
+    public static void malformedCompressedShipmentIsQuarantinedWithoutLoss(GameTestHelper helper) {
+        var ledger = VirtualLedger.get(helper.getLevel());
+        var source = new TransportGraph.Node(helper.absolutePos(new BlockPos(1,1,1)).getX(),
+            helper.absolutePos(new BlockPos(1,1,1)).getY(),
+            helper.absolutePos(new BlockPos(1,1,1)).getZ());
+        var before = ledger.quarantined.size();
+        ledger.capture(source,new byte[]{1,2,3,4,5,6,7});
+        var shipmentId = ledger.pending.values().stream()
+            .filter(p -> p.source().equals(source) && p.cargo().length==7)
+            .findFirst().orElseThrow().id();
+        helper.runAfterDelay(35, () -> {
+            helper.assertTrue(ledger.quarantined.containsKey(shipmentId),
+                "Corrupt cargo should move to quarantine at route planning");
+            helper.assertTrue(!ledger.pending.containsKey(shipmentId),
+                "Corrupt cargo must not be repeatedly decoded");
+            helper.assertTrue(ledger.quarantined.size()>=before+1,
+                "Malformed cargo unexpectedly disappeared");
+            var restored = VirtualLedger.load(ledger.save(new CompoundTag()));
+            helper.assertTrue(restored.quarantined.containsKey(shipmentId),
+                "Opaque quarantined cargo disappeared across NBT save/load");
+            helper.assertTrue(java.util.Arrays.equals(
+                new byte[]{1,2,3,4,5,6,7},
+                restored.quarantined.get(shipmentId).getByteArray("Cargo")),
+                "Corrupt payload bytes changed during recovery");
+            helper.succeed();
+        });
+    }
+
+    @GameTest(template="empty",timeoutTicks=40)
+    public static void invalidPersistedShipmentCannotPreventWorldLedgerLoad(GameTestHelper helper) {
+        CompoundTag file = new CompoundTag();
+        var engines = new net.minecraft.nbt.ListTag();
+        CompoundTag owner = new CompoundTag();
+        CompoundTag ownerNode = new CompoundTag();
+        ownerNode.putInt("X",100);
+        ownerNode.putInt("Y",64);
+        ownerNode.putInt("Z",100);
+        owner.put("Source",ownerNode);
+        owner.putDouble("Odometer",1);
+        var badShipments = new net.minecraft.nbt.ListTag();
+        CompoundTag invalid = new CompoundTag();
+        java.util.UUID id = java.util.UUID.randomUUID();
+        invalid.putUUID("Id",id);
+        invalid.putByteArray("Cargo",new byte[]{89,11,8});
+        invalid.putString("Status","UNKNOWN_CORRUPT_ENUM");
+        invalid.putDouble("Distance",1);
+        badShipments.add(invalid);
+        owner.put("Shipments",badShipments);
+        engines.add(owner);
+        file.put("Engines",engines);
+        var recovered = VirtualLedger.load(file);
+        helper.assertTrue(recovered.quarantined.size()==1,
+            "Unknown persisted enum crashed world load or discarded cargo");
+        helper.assertTrue(recovered.quarantined.containsKey(id),
+            "Corrupt shipment identity was lost");
+        var again = VirtualLedger.load(recovered.save(new CompoundTag()));
+        helper.assertTrue(again.quarantined.size()==1
+            && java.util.Arrays.equals(new byte[]{89,11,8},
+                again.quarantined.get(id).getByteArray("Cargo")),
+            "Quarantined contents were not preserved across second load");
+        helper.succeed();
+    }
+
 }
