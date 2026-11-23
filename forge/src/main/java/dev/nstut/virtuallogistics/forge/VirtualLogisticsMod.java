@@ -14,6 +14,9 @@ public final class VirtualLogisticsMod {
     public static final ForgeConfigSpec.BooleanValue ENABLED = CONFIG_BUILDER
         .comment("Enable virtual transport instead of Create's physical chain package lists.")
         .define("enabled", false);
+    public static final ForgeConfigSpec.BooleanValue ALLOW_UNSAFE_EXTERNAL_INSERTION = CONFIG_BUILDER
+        .comment("EXPERIMENTAL: insert into an arbitrary adjacent IItemHandler. Unsafe after crashes or partial insertion; for disposable worlds only.")
+        .define("allowUnsafeExternalInsertion", false);
     public static final ForgeConfigSpec.IntValue DELIVERY_BUDGET = CONFIG_BUILDER
         .comment("Maximum actual inventory operations per world tick; no artificial network throughput cap.")
         .defineInRange("deliveryBudgetPerTick", 128, 1, 10000);
