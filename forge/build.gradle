@@ -31,20 +31,20 @@ minecraft {
                 property 'cvl.requireFluidLogistics', '1.3.2'
             if (project.findProperty('highVolumePackages') != null)
                 property 'cvl.highVolumePackages', project.property('highVolumePackages').toString()
+            if (project.findProperty('nativeCoverage')?.toString() == 'true') {
+                def agent = configurations.jacocoAgent.singleFile
+                def destination = layout.buildDirectory.file(
+                    'jacoco/forge-' + (fluidCompatibilityRun ? 'fluid' : 'base') + '.exec').get().asFile
+                destination.parentFile.mkdirs()
+                jvmArg "-javaagent:${agent.absolutePath}=destfile=${destination.absolutePath},append=false,dumponexit=true"
+            }
         }
     }
 }
 
 jacoco { toolVersion = '0.8.12' }
-// Off by default for routine game tests. Pass -PnativeCoverage=true to
-// instrument our real Forge adapter under its classloader.
-tasks.matching { it.name == 'runGameTestServer' }.configureEach {
-    def instrument = extensions.getByType(org.gradle.testing.jacoco.plugins.JacocoTaskExtension)
-    instrument.enabled = project.findProperty('nativeCoverage')?.toString() == 'true'
-    instrument.destinationFile = layout.buildDirectory.file(
-        'jacoco/forge-' + (fluidCompatibilityRun ? 'fluid' : 'base') + '.exec').get().asFile
-    instrument.append = false
-}
+// ForgeGradle launches a custom run task, not a Gradle JavaExec.
+// Attach the agent explicitly only in the opt-in native GameTest run.
 tasks.register('nativeForgeCoverageReport', JacocoReport) {
     group = 'verification'
     description = 'Aggregate instrumented Forge GameTest adapter coverage (requires -PnativeCoverage=true).'
