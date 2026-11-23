@@ -28,3 +28,18 @@ jacocoTestCoverageVerification {
     }
 }
 check.dependsOn jacocoTestCoverageVerification
+
+sourceSets {
+    benchmark {
+        java.srcDir 'src/benchmark/java'
+        compileClasspath += sourceSets.main.output
+        runtimeClasspath += output + compileClasspath
+    }
+}
+tasks.register('transportBenchmark', JavaExec) {
+    group = 'verification'
+    description = 'Non-Forge logical transport benchmark: 1k/10k/100k cargo.'
+    classpath = sourceSets.benchmark.runtimeClasspath
+    mainClass = 'dev.nstut.virtuallogistics.core.TransportBenchmark'
+    maxHeapSize = '2g'
+}
