@@ -323,4 +323,51 @@ public final class VirtualLogisticsGameTests {
         helper.succeed();
     }
 
+
+    @GameTest(template="empty",timeoutTicks=60)
+    public static void routeSpeedGatePausesBrokenAndUnpoweredNetwork(GameTestHelper helper) {
+        BlockPos source = new BlockPos(1,1,1);
+        BlockPos portPos = new BlockPos(2,1,1);
+        BlockPos motorPos = new BlockPos(1,0,1);
+        helper.setBlock(motorPos, AllBlocks.CREATIVE_MOTOR.getDefaultState()
+            .setValue(CreativeMotorBlock.FACING,Direction.UP));
+        helper.setBlock(source,AllBlocks.CHAIN_CONVEYOR.getDefaultState());
+        helper.setBlock(portPos,AllBlocks.PACKAGE_FROGPORT.getDefaultState());
+        var chain=(ChainConveyorBlockEntity)helper.getBlockEntity(source);
+        var port=(FrogportBlockEntity)helper.getBlockEntity(portPos);
+        var motor=(CreativeMotorBlockEntity)helper.getBlockEntity(motorPos);
+        motor.generatedSpeed.setValue(128);
+        motor.updateGeneratedRotation();
+        port.acceptsPackages=true;
+        port.addressFilter="speed";
+        port.target = new PackagePortTarget.ChainConveyorFrogportTarget(
+            chain.getBlockPos().subtract(port.getBlockPos()),0,null);
+        port.target.register(port,helper.getLevel(),port.getBlockPos());
+        var start = new TransportGraph.Node(chain.getBlockPos().getX(),
+            chain.getBlockPos().getY(),chain.getBlockPos().getZ());
+        var destination = new TransportGraph.Node(port.getBlockPos().getX(),
+            port.getBlockPos().getY(),port.getBlockPos().getZ());
+        var route = new TransportGraph.Route(java.util.List.of(start),
+            new TransportGraph.Endpoint(start,destination,"speed"),1);
+        var engine = new dev.nstut.virtuallogistics.core.VirtualTransportEngine(0);
+        engine.submit(new byte[]{1},route);
+        double rpm = dev.nstut.virtuallogistics.forge.VirtualTransportService
+            .effectiveRpm(helper.getLevel(),engine);
+        helper.assertTrue(rpm>0, "Powered connected route did not progress");
+        chain.loopPorts.clear();
+        chain.travelPorts.clear();
+        helper.assertTrue(dev.nstut.virtuallogistics.forge.VirtualTransportService
+            .effectiveRpm(helper.getLevel(),engine)==0,
+            "Disconnected route still advanced logical distance");
+        port.target.register(port,helper.getLevel(),port.getBlockPos());
+        helper.assertTrue(dev.nstut.virtuallogistics.forge.VirtualTransportService
+            .effectiveRpm(helper.getLevel(),engine)>0,
+            "Reconnected route did not resume");
+        port.acceptsPackages=false;
+        helper.assertTrue(dev.nstut.virtuallogistics.forge.VirtualTransportService
+            .effectiveRpm(helper.getLevel(),engine)==0,
+            "Disabled destination still advanced shipment");
+        helper.succeed();
+    }
+
 }
