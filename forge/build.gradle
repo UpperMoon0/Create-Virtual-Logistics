@@ -23,11 +23,14 @@ minecraft {
         gameTestServer {
             workingDirectory project.file('run-gametest')
             property 'forge.enabledGameTestNamespaces', 'createvirtuallogistics'
+            if (project.findProperty('withFluidLogistics')?.toString() == 'true')
+                property 'cvl.requireFluidLogistics', '1.3.2'
         }
     }
 }
 repositories {
     maven { url = 'https://repo.spongepowered.org/repository/maven-public/' }
+    maven { url = 'https://cursemaven.com' }
     maven { url = 'https://maven.tterrag.com/' }
     maven { url = 'https://maven.createmod.net' }
     maven { url = 'https://maven.parchmentmc.org' }
@@ -42,6 +45,11 @@ dependencies {
     compileOnly fg.deobf('dev.engine-room.flywheel:flywheel-forge-api-' + minecraft_version + ':' + flywheel_version)
     runtimeOnly fg.deobf('dev.engine-room.flywheel:flywheel-forge-' + minecraft_version + ':' + flywheel_version)
     implementation fg.deobf('com.tterrag.registrate:Registrate:' + registrate_version)
+    // Optional isolated compatibility workload. Never package this dependency
+    // into the addon; production remains opt-in and disabled by default.
+    if (project.findProperty('withFluidLogistics')?.toString() == 'true') {
+        runtimeOnly fg.deobf('curse.maven:create-fluidlogistic-1475079:9340856')
+    }
 }
 mixin {
     add sourceSets.main, 'createvirtuallogistics-refmap.json'
