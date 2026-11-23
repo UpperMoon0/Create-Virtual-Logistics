@@ -104,7 +104,7 @@ public final class VirtualTransportEngine {
             if (accepted) {
                 shipments.remove(current.id());
                 routeReferences.compute(current.route(), (route, count) ->
-                    count == null || count <= 1 ? null : count - 1);
+                    count == 1 ? null : count - 1);
                 delivered++;
             } else {
                 Shipment retry = new Shipment(current.id(), current.cargo(), current.route(),
