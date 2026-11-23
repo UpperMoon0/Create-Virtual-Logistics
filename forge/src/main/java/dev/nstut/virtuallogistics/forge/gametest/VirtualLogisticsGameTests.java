@@ -223,8 +223,15 @@ public final class VirtualLogisticsGameTests {
             backup = dev.nstut.virtuallogistics.forge.VirtualLogisticsCommands
                 .exportSnapshot(helper.getLevel());
             helper.assertTrue(java.nio.file.Files.size(backup)>0, "Empty snapshot export");
+            int expectedCount = ledger.size();
+            long reloadStart = System.nanoTime();
             var restored = VirtualLedger.load(net.minecraft.nbt.NbtIo.readCompressed(
                 new java.io.FileInputStream(backup.toFile())));
+            long reloadNanos = System.nanoTime() - reloadStart;
+            System.out.printf("CVL native NBT restore: %d packages, %.3f ms%n",
+                expectedCount, reloadNanos/1e6);
+            helper.assertTrue(restored.size()==expectedCount,
+                "SavedData roundtrip lost or duplicated a shipment");
             helper.assertTrue(restored.pending.values().stream()
                 .anyMatch(p -> java.util.Arrays.equals(p.cargo(),unique)),
                 "Exported cargo was lost or modified");
