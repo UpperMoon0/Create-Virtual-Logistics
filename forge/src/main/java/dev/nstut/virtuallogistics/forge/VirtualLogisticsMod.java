@@ -22,7 +22,7 @@ public final class VirtualLogisticsMod {
         .defineInRange("deliveryBudgetPerTick", 128, 1, 10000);
     public static final ForgeConfigSpec.IntValue RENDER_CAP = CONFIG_BUILDER
         .comment("Maximum decorative packages rendered per client; transport is unaffected.")
-        .defineInRange("renderCap", 24, 0, 256);
+        .defineInRange("renderCap", 24, 0, CvlNetwork.MAX_VISUAL_SAMPLES);
     private static final ForgeConfigSpec CONFIG = CONFIG_BUILDER.build();
 
     public VirtualLogisticsMod() {
