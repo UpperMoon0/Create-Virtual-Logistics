@@ -181,9 +181,11 @@ public final class VirtualTransportService {
             ItemStack cargo;
             try { cargo = decode(item.cargo()); }
             catch (IOException e) {
-                deferred.add(item);
+                // Never repeatedly parse poison cargo every scheduling cycle.
+                // The raw bytes remain in the persistent quarantine and export.
+                ledger.quarantine(item, e.getMessage());
                 iterator.remove();
-                continue; // Keep undecodable cargo but don't starve other orders.
+                continue;
             }
             var route = graph(level, item.source(), now).route(item.source(),
                 PackageItem.getAddress(cargo),
