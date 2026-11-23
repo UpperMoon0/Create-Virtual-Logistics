@@ -48,6 +48,9 @@ tasks.register('nativeForgeCoverageReport', JacocoReport) {
     sourceDirectories.from(layout.projectDirectory.dir('src/main/java'))
     classDirectories.setFrom(files(sourceSets.main.output.classesDirs).asFileTree.matching {
         exclude 'dev/nstut/virtuallogistics/core/**'
+        // GameTests compile in Forge's main source set, but test code is NOT
+        // production adapter coverage; excluding it prevents inflated results.
+        exclude 'dev/nstut/virtuallogistics/forge/gametest/**'
     })
     reports { xml.required = true; html.required = true }
 }
