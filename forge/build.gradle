@@ -31,13 +31,7 @@ minecraft {
                 property 'cvl.requireFluidLogistics', '1.3.2'
             if (project.findProperty('highVolumePackages') != null)
                 property 'cvl.highVolumePackages', project.property('highVolumePackages').toString()
-            if (project.findProperty('nativeCoverage')?.toString() == 'true') {
-                def agent = configurations.jacocoAgent.singleFile
-                def destination = layout.buildDirectory.file(
-                    'jacoco/forge-' + (fluidCompatibilityRun ? 'fluid' : 'base') + '.exec').get().asFile
-                destination.parentFile.mkdirs()
-                jvmArg "-javaagent:${agent.absolutePath}=destfile=${destination.absolutePath},append=false,dumponexit=true"
-            }
+
         }
     }
 }
@@ -56,6 +50,20 @@ tasks.register('nativeForgeCoverageReport', JacocoReport) {
         exclude 'dev/nstut/virtuallogistics/core/**'
     })
     reports { xml.required = true; html.required = true }
+}
+
+
+afterEvaluate {
+    if (project.findProperty('nativeCoverage')?.toString() == 'true') {
+        // ForgeGradle configures its bundled maven repository late. Resolving
+        // JaCoCo while the run extension is declared breaks that setup.
+        def agent = configurations.jacocoAgent.singleFile
+        def destination = layout.buildDirectory.file(
+            'jacoco/forge-' + (fluidCompatibilityRun ? 'fluid' : 'base') + '.exec').get().asFile
+        destination.parentFile.mkdirs()
+        minecraft.runs.gameTestServer.jvmArg(
+            "-javaagent:${agent.absolutePath}=destfile=${destination.absolutePath},append=false,dumponexit=true")
+    }
 }
 
 repositories {
