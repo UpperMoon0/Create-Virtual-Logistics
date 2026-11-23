@@ -42,6 +42,11 @@ pipeline {
             steps { sh './gradlew :forge:runGameTestServer --no-daemon --console=plain --max-workers=1' }
             post { always { archiveArtifacts artifacts: 'forge/run-gametest/logs/*.log', allowEmptyArchive: true } }
         }
+        stage('Fluid Logistics 1.3.2 native coexistence') {
+            when { expression { return params.RUN_NATIVE_GAMETESTS } }
+            steps { sh './gradlew -PwithFluidLogistics=true :forge:runGameTestServer --no-daemon --console=plain --max-workers=1' }
+            post { always { archiveArtifacts artifacts: 'forge/run-gametest-fluid/logs/*.log', allowEmptyArchive: true } }
+        }
     }
     post {
         always {
