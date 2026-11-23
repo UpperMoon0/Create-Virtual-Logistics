@@ -142,11 +142,10 @@ public final class VirtualLogisticsGameTests {
         for (int i=0; i<fluids.length; i++) {
             ItemStack box = PackageStyles.getDefaultBox();
             PackageItem.addAddress(box,"0_hno3");
+            // Apply authentic Create fragment/order semantics (same API Fluid
+            // Logistics 1.20.1 uses), rather than inventing the order keys.
+            PackageItem.setOrder(box,8321,2,true,i,i==fluids.length-1,null);
             CompoundTag order = box.getOrCreateTag();
-            order.putInt("OrderId", 8321);
-            order.putInt("LinkIndex", 2);
-            order.putInt("FragmentIndex", i);
-            order.putBoolean("IsFinal", i==fluids.length-1);
             CompoundTag fluid = new CompoundTag();
             fluid.putString("FluidName",fluids[i]);
             fluid.putLong("Amount",4_000_000L + i);
@@ -159,8 +158,13 @@ public final class VirtualLogisticsGameTests {
                 ItemStack recovered = ItemStack.of(net.minecraft.nbt.NbtIo.readCompressed(
                     new java.io.ByteArrayInputStream(bytes)));
                 if (!ItemStack.isSameItemSameTags(expected, recovered)
-                    || expected.getCount()!=recovered.getCount())
-                    helper.fail("NBT or package count changed for "+fluids[i]);
+                    || expected.getCount()!=recovered.getCount()
+                    || !PackageItem.hasFragmentData(recovered)
+                    || PackageItem.getOrderId(recovered)!=8321
+                    || PackageItem.getLinkIndex(recovered)!=2
+                    || PackageItem.getIndex(recovered)!=i
+                    || PackageItem.isFinal(recovered)!=(i==fluids.length-1))
+                    helper.fail("NBT, Create order fragment or count changed for "+fluids[i]);
             } catch (java.io.IOException ex) {
                 helper.fail("Could not decode captured package: "+ex);
             }
