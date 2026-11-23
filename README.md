@@ -54,6 +54,12 @@ Native Forge acceptance tests (isolated throwaway world, never production):
 
     ./gradlew :forge:runGameTestServer
 
+Isolated Forge runtime with **real** pinned Fluid Logistics 1.3.2 loaded (startup, Create order-fragment/serialized package preservation; GT chemistry and end-to-end reassembly still require full-modpack acceptance):
+
+    ./gradlew -PwithFluidLogistics=true :forge:runGameTestServer
+
+This uses a separate disposable `forge/run-gametest-fluid/` world. The mod is only a runtime test dependency, not bundled or installed in production.
+
 The core tests cover 10,000 concurrent logical packages, shortest-path routing, waiting destination, retry, no per-package tick simulation, speed freeze/resume, persistence snapshots, work budgeting, render cap, and invalid state rejection.
 
 ## Production integration
