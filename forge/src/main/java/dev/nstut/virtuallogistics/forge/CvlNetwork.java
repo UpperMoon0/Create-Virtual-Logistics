@@ -17,7 +17,9 @@ import java.util.function.Supplier;
 
 /** Sampled visuals only. No inventory contents or authoritative transport state go to clients. */
 public final class CvlNetwork {
-    private static final String VERSION = "1";
+    private static final String VERSION = "2";
+    public static final int MAX_VISUAL_ROUTE_NODES = 96;
+    public static final int MAX_VISUAL_SAMPLES = 64;
     private static final SimpleChannel CHANNEL = NetworkRegistry.ChannelBuilder
         .named(new ResourceLocation(VirtualLogisticsMod.ID, "visual"))
         .networkProtocolVersion(() -> VERSION)
@@ -48,11 +50,11 @@ public final class CvlNetwork {
     }
     private static Visuals decode(FriendlyByteBuf buffer) {
         int count = buffer.readVarInt();
-        if (count < 0 || count > 256) throw new IllegalArgumentException("Invalid visual count");
+        if (count < 0 || count > MAX_VISUAL_SAMPLES) throw new IllegalArgumentException("Invalid visual count");
         List<Sample> list = new ArrayList<>(count);
         for (int i=0;i<count;i++) {
             int size = buffer.readVarInt();
-            if (size<1 || size>8192) throw new IllegalArgumentException("Invalid visual route");
+            if (size<1 || size>MAX_VISUAL_ROUTE_NODES) throw new IllegalArgumentException("Invalid visual route");
             List<TransportGraph.Node> route = new ArrayList<>(size);
             for (int n=0;n<size;n++) route.add(VirtualLedger.node(buffer.readBlockPos()));
             list.add(new Sample(route,buffer.readDouble(),buffer.readDouble()));

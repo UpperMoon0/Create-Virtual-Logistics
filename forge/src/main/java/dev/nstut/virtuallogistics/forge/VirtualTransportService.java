@@ -41,6 +41,9 @@ public final class VirtualTransportService {
     private static final int MAX_GRAPH_NODES = 8192;
     private static final int PENDING_BUDGET_PER_TICK = 128;
     private static final int RETRY_TICKS = 20;
+    private static final int MAX_CARGO_BYTES = 2 * 1024 * 1024;
+    private static final long MAX_UNCOMPRESSED_NBT_BYTES = 8L * 1024 * 1024;
+    private static final Map<ServerLevel, Integer> NEXT_SOURCE = new WeakHashMap<>();
     private record CachedGraph(TransportGraph graph, long expiresTick) {}
     private static final Map<ServerLevel, Map<TransportGraph.Node, CachedGraph>> GRAPHS = new WeakHashMap<>();
 
@@ -53,7 +56,7 @@ public final class VirtualTransportService {
         try {
             // The serialized ItemStack, including fluid, fragment and order metadata, is owned by the ledger.
             byte[] cargo = encode(packageToMove.item);
-            if (cargo.length > 2 * 1024 * 1024) return false;
+            if (cargo.length > MAX_CARGO_BYTES) return false;
             VirtualLedger.get(level).capture(VirtualLedger.node(origin.getBlockPos()), cargo);
             return true;
         } catch (IOException e) {
@@ -68,7 +71,19 @@ public final class VirtualTransportService {
     }
 
     static ItemStack decode(byte[] bytes) throws IOException {
-        return ItemStack.of(NbtIo.readCompressed(new ByteArrayInputStream(bytes)));
+        if (bytes == null || bytes.length == 0 || bytes.length > MAX_CARGO_BYTES)
+            throw new IOException("Invalid compressed shipment size");
+        try (var compressed = new java.util.zip.GZIPInputStream(new ByteArrayInputStream(bytes));
+             var input = new java.io.DataInputStream(compressed)) {
+            // Forge 1.20.1 has no readCompressed(stream, accounter) overload.
+            ItemStack cargo = ItemStack.of(NbtIo.read(
+                input, new net.minecraft.nbt.NbtAccounter(MAX_UNCOMPRESSED_NBT_BYTES)));
+            if (cargo.isEmpty() || !PackageItem.isPackage(cargo) || cargo.getCount() != 1)
+                throw new IOException("Shipment no longer contains exactly one Create package");
+            return cargo;
+        } catch (RuntimeException malformed) {
+            throw new IOException("Malformed or oversized shipment payload", malformed);
+        }
     }
 
     public static void onServerTick(TickEvent.ServerTickEvent event) {
@@ -76,31 +91,93 @@ public final class VirtualTransportService {
         for (ServerLevel level : event.getServer().getAllLevels()) {
             VirtualLedger ledger = VirtualLedger.get(level);
             long now = level.getGameTime();
+            // Disabling the addon must freeze existing cargo, not silently deliver it.
+            // Operators may disable it for inspection without mutating inventories.
+            if (!VirtualLogisticsMod.ENABLED.get()) {
+                if (now % 10 == 0 && !level.players().isEmpty())
+                    sendEmptyVisuals(level);
+                continue;
+            }
             if (ledger.size() == 0) {
                 if (now % 10 == 0 && !level.players().isEmpty())
                     sendVisuals(level, ledger); // Clear previously rendered sample proxies.
                 continue;
             }
             ledger.restoreEngines(now);
-            if (VirtualLogisticsMod.ENABLED.get()) {
-                routePending(level, ledger, now);
-            }
-            int left = VirtualLogisticsMod.DELIVERY_BUDGET.get();
-            // Advance every source clock, including sources whose deliveries are budget-deferred.
-            for (var entry : ledger.active.entrySet()) {
-                var block = level.hasChunkAt(VirtualLedger.block(entry.getKey()))
-                    ? level.getBlockEntity(VirtualLedger.block(entry.getKey())) : null;
-                double rpm = block instanceof ChainConveyorBlockEntity conveyor ? conveyor.getSpeed() : 0;
+            routePending(level, ledger, now);
+            // Advance every source clock even when the global delivery budget is
+            // exhausted, and persist updated clocks for correct save/reload.
+            var sources = new ArrayList<>(ledger.active.entrySet());
+            sources.sort(Map.Entry.comparingByKey());
+            for (var entry : sources) {
+                // A source cannot outrun a slow, reversed, unloaded or broken
+                // segment. Group by unique active routes, not by all packages:
+                // O(routes * nodes), independent of logical throughput.
+                double rpm = effectiveRpm(level, entry.getValue());
+                double previousOdometer = entry.getValue().odometer();
                 entry.getValue().clock(now, rpm);
-                if (left > 0) {
-                    var report = entry.getValue().deliverReady(now, left, RETRY_TICKS,
+                if (previousOdometer != entry.getValue().odometer()) ledger.setDirty();
+            }
+            // Round-robin across powered sources. Never let one busy source starve
+            // another just because HashMap iteration picks it first every tick.
+            int left = VirtualLogisticsMod.DELIVERY_BUDGET.get();
+            if (!sources.isEmpty()) {
+                int start = Math.floorMod(NEXT_SOURCE.getOrDefault(level, 0), sources.size());
+                int processedSources = 0;
+                for (int i = 0; i < sources.size() && left > 0; i++) {
+                    var entry = sources.get((start + i) % sources.size());
+                    // The minimum reservation of one attempt per ready source keeps
+                    // the shared budget fair; unused attempts are not wasted.
+                    int sourceBudget = Math.max(1, left / (sources.size() - i));
+                    var report = entry.getValue().deliverReady(now, sourceBudget, RETRY_TICKS,
                         shipment -> deliver(level, shipment));
                     left -= report.attempted();
+                    processedSources++;
                     if (report.attempted() > 0) ledger.setDirty();
                 }
+                // Use any leftover budget after the fair first pass. A source
+                // with no due packages must not waste capacity that another
+                // ready source could use in the same server tick.
+                if (left > 0) {
+                    for (int i = 0; i < sources.size() && left > 0; i++) {
+                        var entry = sources.get((start + i) % sources.size());
+                        var report = entry.getValue().deliverReady(now, left, RETRY_TICKS,
+                            shipment -> deliver(level, shipment));
+                        left -= report.attempted();
+                        if (report.attempted() > 0) ledger.setDirty();
+                    }
+                }
+                NEXT_SOURCE.put(level, (start + Math.max(1, processedSources)) % sources.size());
             }
             if (now % 10 == 0) sendVisuals(level, ledger);
         }
+    }
+
+    /**
+     * Fail closed when multiple Create chains have different rotational speeds.
+     * Full segment-by-segment scheduling is still required to support mixed RPM.
+     * No cargo advances through an unloaded, disconnected or unpowered leg.
+     */
+    public static double effectiveRpm(ServerLevel level, VirtualTransportEngine engine) {
+        double commonSpeed = -1;
+        for (var route : engine.activeRoutes()) {
+            if (!routeStillConnected(level, route)) return 0;
+            for (var node : route.nodes()) {
+                BlockEntity block = level.getBlockEntity(VirtualLedger.block(node));
+                if (!(block instanceof ChainConveyorBlockEntity chain)) return 0;
+                double speed = chain.getSpeed();
+                if (!(speed > 0) || !Double.isFinite(speed)) return 0;
+                if (commonSpeed >= 0 && Double.compare(commonSpeed, speed) != 0)
+                    return 0;
+                commonSpeed = speed;
+            }
+        }
+        return commonSpeed > 0 ? commonSpeed : 0;
+    }
+
+    private static void sendEmptyVisuals(ServerLevel level) {
+        for (ServerPlayer player : level.players())
+            CvlNetwork.send(player, new CvlNetwork.Visuals(List.of()));
     }
 
     private static void sendVisuals(ServerLevel level, VirtualLedger ledger) {
@@ -114,9 +191,12 @@ public final class VirtualTransportService {
                 if (startPos.distSqr(player.blockPosition()) > 128 * 128) continue;
                 var source = level.hasChunkAt(startPos) ? level.getBlockEntity(startPos) : null;
                 double speed = source instanceof ChainConveyorBlockEntity conveyor
-                    ? Math.abs(conveyor.getSpeed()) / 360.0 : 0;
+                    ? Math.max(0, conveyor.getSpeed()) / 360.0 : 0;
                 for (var shipment : engine.sample(cap - visuals.size())) {
                     var route = shipment.route();
+                    // Do not send a huge graph inside a visual packet.
+                    if (route.nodes().size() + 1 > CvlNetwork.MAX_VISUAL_ROUTE_NODES)
+                        continue;
                     double start = shipment.arrivalDistance() - route.distance();
                     double progress = Math.max(0, engine.odometer() - start);
                     visuals.add(new CvlNetwork.Sample(VirtualVisualMath.routePoints(route),progress,speed));
@@ -136,9 +216,11 @@ public final class VirtualTransportService {
             ItemStack cargo;
             try { cargo = decode(item.cargo()); }
             catch (IOException e) {
-                deferred.add(item);
+                // Never repeatedly parse poison cargo every scheduling cycle.
+                // The raw bytes remain in the persistent quarantine and export.
+                ledger.quarantine(item, e.getMessage());
                 iterator.remove();
-                continue; // Keep undecodable cargo but don't starve other orders.
+                continue;
             }
             var route = graph(level, item.source(), now).route(item.source(),
                 PackageItem.getAddress(cargo),
@@ -161,6 +243,10 @@ public final class VirtualTransportService {
 
     private static TransportGraph graph(ServerLevel level, TransportGraph.Node source, long tick) {
         Map<TransportGraph.Node, CachedGraph> cache = GRAPHS.computeIfAbsent(level, ignored -> new HashMap<>());
+        // Source locations are not immortal. Purge expired graph snapshots so
+        // builds/demolitions do not accumulate an unbounded pathfinding cache.
+        if (tick % 1200 == 0)
+            cache.entrySet().removeIf(entry -> entry.getValue().expiresTick() <= tick);
         CachedGraph stored = cache.get(source);
         if (stored != null && tick < stored.expiresTick()) return stored.graph();
 
@@ -182,9 +268,14 @@ public final class VirtualTransportService {
                 BlockEntity neighbour = level.getBlockEntity(other);
                 if (!(neighbour instanceof ChainConveyorBlockEntity target)
                     || !target.connections.contains(offset.multiply(-1))) continue;
-                graph.connect(pos,VirtualLedger.node(other),
-                    Math.max(0.01, Math.sqrt(offset.distSqr(BlockPos.ZERO))));
-                if (!seen.contains(VirtualLedger.node(other))) queue.add(VirtualLedger.node(other));
+                var neighbourNode = VirtualLedger.node(other);
+                // Every physical connection is represented from both ends in
+                // Create. Register each undirected edge once to avoid doubled
+                // adjacency lists and unnecessary Dijkstra heap work.
+                if (pos.compareTo(neighbourNode) < 0)
+                    graph.connect(pos, neighbourNode,
+                        Math.max(0.01, Math.sqrt(offset.distSqr(BlockPos.ZERO))));
+                if (!seen.contains(neighbourNode)) queue.add(neighbourNode);
             }
             for (BlockPos offset : conveyor.loopPorts.keySet())
                 registerPort(level, graph, pos, physical.offset(offset));
@@ -205,6 +296,8 @@ public final class VirtualTransportService {
 
     private static boolean deliver(ServerLevel level, VirtualTransportEngine.Shipment shipment) {
         TransportGraph.Route route = shipment.route();
+        // Reject stale routes rather than teleporting across broken infrastructure.
+        if (!routeStillConnected(level, route)) return false;
         BlockPos destination = VirtualLedger.block(route.endpoint().port());
         if (!level.hasChunkAt(destination)) return false;
         BlockEntity be = level.getBlockEntity(destination);
@@ -213,9 +306,9 @@ public final class VirtualTransportService {
         try {
             ItemStack cargo = decode(shipment.cargo());
             if (!PackageItem.matchAddress(cargo, frogport.getFilterString())) return false;
-            // Prefer the actual crate/pipe below. Never allocate fake storage or exceed a Forge item handler.
+            // Arbitrary external handlers are unsafe unless explicitly enabled for disposable tests.
             BlockPos below = destination.below();
-            if (level.hasChunkAt(below)) {
+            if (VirtualLogisticsMod.ALLOW_UNSAFE_EXTERNAL_INSERTION.get() && level.hasChunkAt(below)) {
                 BlockEntity inventory = level.getBlockEntity(below);
                 if (inventory != null) {
                     Optional<IItemHandler> handler = inventory.getCapability(ForgeCapabilities.ITEM_HANDLER,
@@ -224,7 +317,10 @@ public final class VirtualTransportService {
                 }
             }
             if (insertFully(frogport.inventory, cargo)) {
-                frogport.notifyUpdate();
+                // The item is already in the authoritative recipient slot.
+                // A renderer/notification failure must not requeue cargo.
+                try { frogport.notifyUpdate(); }
+                catch (RuntimeException ignored) { /* receipt already committed in memory */ }
                 return true;
             }
         } catch (IOException ignored) {
@@ -233,15 +329,61 @@ public final class VirtualTransportService {
         return false;
     }
 
-    private static boolean insertFully(IItemHandler handler, ItemStack stack) {
-        // Create packages are non-stackable. A single-item slot insertion cannot partially
-        // succeed, even if a neighbouring mod changes its handler between simulate/execute.
+    /**
+     * Validate loaded infrastructure without chunk generation or forced loads.
+     * This is not yet a per-segment speed or topology-revision simulation.
+     */
+    public static boolean routeStillConnected(ServerLevel level, TransportGraph.Route route) {
+        List<TransportGraph.Node> path = route.nodes();
+        for (int i = 0; i < path.size(); i++) {
+            BlockPos pos = VirtualLedger.block(path.get(i));
+            if (!level.hasChunkAt(pos)) return false;
+            if (!(level.getBlockEntity(pos) instanceof ChainConveyorBlockEntity chain)
+                || chain.getSpeed() <= 0) return false;
+            if (i + 1 < path.size()) {
+                BlockPos next = VirtualLedger.block(path.get(i + 1));
+                BlockPos offset = next.subtract(pos);
+                if (!chain.connections.contains(offset) || !level.hasChunkAt(next)) return false;
+                if (!(level.getBlockEntity(next) instanceof ChainConveyorBlockEntity other)
+                    || !other.connections.contains(offset.multiply(-1))) return false;
+            } else {
+                BlockPos port = VirtualLedger.block(route.endpoint().port());
+                BlockPos offset = port.subtract(pos);
+                if (!chain.loopPorts.containsKey(offset) && !chain.travelPorts.containsKey(offset))
+                    return false;
+                if (!level.hasChunkAt(port)
+                    || !(level.getBlockEntity(port) instanceof FrogportBlockEntity destination)
+                    || !destination.acceptsPackages || destination.target == null)
+                    return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Main-thread nonstacking slot insertion. Recover a post-mutation handler
+     * exception by inspecting the originally empty slot before replaying it.
+     * This prevents an exception-induced duplicate in one process, NOT a
+     * durability guarantee across independent region/SavedData crash saves.
+     */
+    public static boolean insertFully(IItemHandler handler, ItemStack stack) {
         if (stack.isEmpty() || stack.getCount() != 1) return false;
         for (int slot = 0; slot < handler.getSlots(); slot++) {
-            if (!handler.isItemValid(slot, stack)) continue;
-            ItemStack simulated = handler.insertItem(slot, stack.copy(), true);
-            if (!simulated.isEmpty()) continue;
-            return handler.insertItem(slot, stack.copy(), false).isEmpty();
+            // Only choose an empty slot: a thrown callback can then be resolved
+            // unambiguously even for identical nonstackable packages.
+            if (!handler.getStackInSlot(slot).isEmpty() || !handler.isItemValid(slot, stack))
+                continue;
+            if (!handler.insertItem(slot, stack.copy(), true).isEmpty()) continue;
+            try {
+                if (handler.insertItem(slot, stack.copy(), false).isEmpty()) return true;
+            } catch (RuntimeException postCommit) {
+                // The handler may have inserted successfully before its callback
+                // failed. Never count that as rejection and insert it a second time.
+                ItemStack now = handler.getStackInSlot(slot);
+                if (now.getCount() == 1 && ItemStack.isSameItemSameTags(now, stack))
+                    return true;
+                throw postCommit;
+            }
         }
         return false;
     }

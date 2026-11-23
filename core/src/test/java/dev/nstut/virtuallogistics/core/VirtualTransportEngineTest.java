@@ -30,7 +30,11 @@ class VirtualTransportEngineTest {
         engine.clock(219,-360);
         assertEquals(0,engine.deliverReady(219,10,20,s->true).delivered());
         engine.clock(220,-360);
-        assertEquals(1,engine.deliverReady(220,10,20,s->true).delivered());
+        assertEquals(0,engine.deliverReady(220,10,20,s->true).delivered());
+        engine.clock(239,360);
+        assertEquals(0,engine.deliverReady(239,10,20,s->true).delivered());
+        engine.clock(240,360);
+        assertEquals(1,engine.deliverReady(240,10,20,s->true).delivered());
     }
 
     @Test void destFullDoesNotDropCargoAndRetryIsBounded() {
@@ -131,4 +135,21 @@ class VirtualTransportEngineTest {
             UUID.randomUUID(),new byte[0],ROUTE,-5,
             VirtualTransportEngine.Status.IN_TRANSIT,0));
     }
+
+    @Test void routeTrackingScalesByUniquePathsNotShipmentCount() {
+        var engine = new VirtualTransportEngine(0);
+        var third = new TransportGraph.Node(0,0,30);
+        var alternate = new TransportGraph.Route(
+            List.of(A,third),new TransportGraph.Endpoint(third,third,"alternate"),30);
+        for(int i=0;i<100;i++) engine.submit(new byte[]{1}, ROUTE);
+        engine.submit(new byte[]{2},alternate);
+        assertEquals(2,engine.activeRoutes().size());
+        assertTrue(engine.activeRoutes().contains(ROUTE));
+        assertTrue(engine.activeRoutes().contains(alternate));
+        engine.clock(30,360);
+        assertEquals(101, engine.deliverReady(30,101,20,s -> true).delivered());
+        assertEquals(0,engine.size());
+        assertTrue(engine.activeRoutes().isEmpty());
+    }
+
 }

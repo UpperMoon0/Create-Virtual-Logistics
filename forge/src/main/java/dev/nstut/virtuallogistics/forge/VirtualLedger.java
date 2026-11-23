@@ -24,6 +24,11 @@ public final class VirtualLedger extends SavedData {
     }
 
     public final Map<UUID, Pending> pending = new LinkedHashMap<>();
+    /**
+     * Malformed or unparseable records remain persistently owned by the world.
+     * They must NEVER be discarded or automatically replayed into an inventory.
+     */
+    public final Map<UUID, CompoundTag> quarantined = new LinkedHashMap<>();
     public final Map<TransportGraph.Node, VirtualTransportEngine> active = new HashMap<>();
     private final Map<TransportGraph.Node, VirtualTransportEngine.Snapshot> unloaded = new HashMap<>();
 
@@ -36,6 +41,28 @@ public final class VirtualLedger extends SavedData {
         UUID id = UUID.randomUUID();
         pending.put(id, new Pending(id, start, cargo));
         setDirty();
+    }
+
+    public void quarantine(Pending pending, String reason) {
+        CompoundTag record = new CompoundTag();
+        record.putUUID("Id", pending.id());
+        record.put("Source", writeNode(pending.source()));
+        record.putByteArray("Cargo", pending.cargo());
+        record.putString("Reason", reason);
+        quarantined.put(pending.id(), record);
+        setDirty();
+    }
+
+    private void quarantineRaw(CompoundTag record, String reason) {
+        CompoundTag preserved = record.copy();
+        preserved.putString("Reason", reason);
+        UUID id = preserved.hasUUID("Id") ? preserved.getUUID("Id") : UUID.randomUUID();
+        preserved.putUUID("Id", id);
+        while (quarantined.containsKey(id)) {
+            id = UUID.randomUUID();
+            preserved.putUUID("Id", id);
+        }
+        quarantined.put(id, preserved);
     }
 
     public VirtualTransportEngine engine(TransportGraph.Node source, long currentTick) {
@@ -56,7 +83,7 @@ public final class VirtualLedger extends SavedData {
     }
 
     public int size() {
-        int n = pending.size();
+        int n = pending.size() + quarantined.size();
         for (var engine : active.values()) n += engine.size();
         for (var snapshot : unloaded.values()) n += snapshot.shipments().size();
         return n;
@@ -64,32 +91,70 @@ public final class VirtualLedger extends SavedData {
 
     public static VirtualLedger load(CompoundTag tag) {
         VirtualLedger ledger = new VirtualLedger();
+        for (Tag raw : tag.getList("Quarantined", Tag.TAG_COMPOUND)) {
+            CompoundTag item = (CompoundTag) raw;
+            ledger.quarantineRaw(item, item.getString("Reason"));
+        }
         for (Tag raw : tag.getList("Pending", Tag.TAG_COMPOUND)) {
             CompoundTag item = (CompoundTag)raw;
-            var pending = new Pending(item.getUUID("Id"), readNode(item.getCompound("Source")),
-                item.getByteArray("Cargo"));
-            ledger.pending.put(pending.id(), pending);
+            try {
+                if (!item.hasUUID("Id") || !item.contains("Cargo", Tag.TAG_BYTE_ARRAY)
+                    || !item.contains("Source", Tag.TAG_COMPOUND))
+                    throw new IllegalArgumentException("Missing required pending fields");
+                var pending = new Pending(item.getUUID("Id"), readNode(item.getCompound("Source")),
+                    item.getByteArray("Cargo"));
+                if (ledger.pending.putIfAbsent(pending.id(), pending) != null)
+                    ledger.quarantineRaw(item, "Duplicate pending shipment id");
+            } catch (RuntimeException error) {
+                ledger.quarantineRaw(item, "Malformed pending NBT: " + error.getClass().getSimpleName());
+            }
         }
         for (Tag raw : tag.getList("Engines", Tag.TAG_COMPOUND)) {
             CompoundTag entry = (CompoundTag)raw;
             TransportGraph.Node source = readNode(entry.getCompound("Source"));
             List<VirtualTransportEngine.Shipment> shipments = new ArrayList<>();
             for (Tag sr : entry.getList("Shipments", Tag.TAG_COMPOUND)) {
-                CompoundTag s = (CompoundTag)sr;
-                var endpoint = new TransportGraph.Endpoint(readNode(s.getCompound("EndNode")),
-                    readNode(s.getCompound("Port")), s.getString("Address"));
-                List<TransportGraph.Node> nodes = new ArrayList<>();
-                for (Tag nr : s.getList("Path", Tag.TAG_COMPOUND))
-                    nodes.add(readNode((CompoundTag)nr));
-                var route = new TransportGraph.Route(nodes, endpoint, s.getDouble("Distance"));
-                var shipment = new VirtualTransportEngine.Shipment(s.getUUID("Id"),
-                    s.getByteArray("Cargo"), route, s.getDouble("Arrival"),
-                    VirtualTransportEngine.Status.valueOf(s.getString("Status")), s.getLong("RetryTick"));
-                shipments.add(shipment);
+                CompoundTag payload = (CompoundTag)sr;
+                try {
+                    if (!payload.hasUUID("Id") || !payload.contains("Cargo", Tag.TAG_BYTE_ARRAY))
+                        throw new IllegalArgumentException("Missing shipment identity or cargo");
+                    var endpoint = new TransportGraph.Endpoint(readNode(payload.getCompound("EndNode")),
+                        readNode(payload.getCompound("Port")), payload.getString("Address"));
+                    List<TransportGraph.Node> nodes = new ArrayList<>();
+                    for (Tag nr : payload.getList("Path", Tag.TAG_COMPOUND))
+                        nodes.add(readNode((CompoundTag)nr));
+                    var route = new TransportGraph.Route(nodes, endpoint, payload.getDouble("Distance"));
+                    var shipment = new VirtualTransportEngine.Shipment(payload.getUUID("Id"),
+                        payload.getByteArray("Cargo"), route, payload.getDouble("Arrival"),
+                        VirtualTransportEngine.Status.valueOf(payload.getString("Status")),
+                        payload.getLong("RetryTick"));
+                    if (ledger.pending.containsKey(shipment.id())
+                        || shipments.stream().anyMatch(saved -> saved.id().equals(shipment.id())))
+                        throw new IllegalArgumentException("Duplicate shipment ID");
+                    shipments.add(shipment);
+                } catch (RuntimeException failure) {
+                    CompoundTag preserved = payload.copy();
+                    preserved.put("Source", entry.getCompound("Source").copy());
+                    ledger.quarantineRaw(preserved,
+                        "Malformed in-flight record: " + failure.getClass().getSimpleName());
+                }
             }
-            ledger.unloaded.put(source,
-                new VirtualTransportEngine.Snapshot(entry.getDouble("Odometer"),
-                    entry.getLong("LastTick"), shipments));
+            try {
+                var snapshot = new VirtualTransportEngine.Snapshot(entry.getDouble("Odometer"),
+                    entry.getLong("LastTick"), shipments);
+                // Validate restore invariants before committing the snapshot to runtime.
+                VirtualTransportEngine.restore(snapshot, Math.max(0, entry.getLong("LastTick")));
+                if (ledger.unloaded.putIfAbsent(source, snapshot) != null)
+                    throw new IllegalArgumentException("Duplicate source engine");
+            } catch (RuntimeException failure) {
+                for (var shipment : shipments) {
+                    CompoundTag record = new CompoundTag();
+                    record.putUUID("Id", shipment.id());
+                    record.putByteArray("Cargo", shipment.cargo());
+                    record.put("Source", entry.getCompound("Source").copy());
+                    ledger.quarantineRaw(record, "Invalid source engine");
+                }
+            }
         }
         return ledger;
     }
@@ -104,6 +169,9 @@ public final class VirtualLedger extends SavedData {
             pendingTag.add(t);
         }
         tag.put("Pending", pendingTag);
+        ListTag quarantineTags = new ListTag();
+        for (var item : quarantined.values()) quarantineTags.add(item.copy());
+        tag.put("Quarantined", quarantineTags);
         ListTag engines = new ListTag();
         Map<TransportGraph.Node, VirtualTransportEngine.Snapshot> snapshots = new HashMap<>(unloaded);
         active.forEach((node,engine) -> snapshots.put(node, engine.snapshot()));

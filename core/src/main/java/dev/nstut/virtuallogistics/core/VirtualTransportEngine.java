@@ -47,6 +47,9 @@ public final class VirtualTransportEngine {
         .comparingLong(Shipment::retryTick).thenComparing(Shipment::id);
 
     private final Map<UUID, Shipment> shipments = new HashMap<>();
+    // A source may serve 100k packages but only a handful of distinct paths.
+    // Validate active paths per tick without iterating all packages.
+    private final Map<TransportGraph.Route, Integer> routeReferences = new HashMap<>();
     private final PriorityQueue<Shipment> inflight = new PriorityQueue<>(DUE);
     private final PriorityQueue<Shipment> waiting = new PriorityQueue<>(RETRY);
     private double odometer;
@@ -66,6 +69,7 @@ public final class VirtualTransportEngine {
     public void submit(Shipment shipment) {
         if (shipments.containsKey(shipment.id())) throw new IllegalArgumentException("Duplicate shipment ID");
         shipments.put(shipment.id(), shipment);
+        routeReferences.merge(shipment.route(), 1, Integer::sum);
         if (shipment.status() == Status.IN_TRANSIT) inflight.add(shipment);
         else waiting.add(shipment);
     }
@@ -73,8 +77,9 @@ public final class VirtualTransportEngine {
     public void clock(long nowTick, double rpm) {
         if (nowTick < lastTick) throw new IllegalArgumentException("World clock moved backwards");
         if (!Double.isFinite(rpm)) throw new IllegalArgumentException("Invalid RPM");
-        // Create chain movement: |RPM / 360| blocks per game tick.
-        odometer += (nowTick - lastTick) * Math.abs(rpm) / 360.0;
+        // Forward Create chain movement: RPM / 360 blocks per game tick.
+        // Reversed networks must not advance forward deadlines until reverse paths are modeled.
+        odometer += (nowTick - lastTick) * Math.max(0, rpm) / 360.0;
         lastTick = nowTick;
     }
 
@@ -98,6 +103,8 @@ public final class VirtualTransportEngine {
             }
             if (accepted) {
                 shipments.remove(current.id());
+                routeReferences.compute(current.route(), (route, count) ->
+                    count == 1 ? null : count - 1);
                 delivered++;
             } else {
                 Shipment retry = new Shipment(current.id(), current.cargo(), current.route(),
@@ -107,6 +114,11 @@ public final class VirtualTransportEngine {
             }
         }
         return new DeliveryReport(processed, delivered);
+    }
+
+    /** Unique authoritative routes, independent of package count. */
+    public Collection<TransportGraph.Route> activeRoutes() {
+        return List.copyOf(routeReferences.keySet());
     }
 
     public int inFlight() { return inflight.size(); }
@@ -132,8 +144,10 @@ public final class VirtualTransportEngine {
         if (cap < 0) throw new IllegalArgumentException("Negative render cap");
         if (cap == 0) return List.of();
         List<Shipment> selected = new ArrayList<>(Math.min(cap, shipments.size()));
-        for (Shipment shipment : shipments.values()) {
-            if (shipment.status() != Status.IN_TRANSIT) continue;
+        // The authoritative shipment map may be dominated by undeliverable
+        // WAITING_FOR_STORAGE cargo. Only the in-flight queue can be rendered:
+        // O(min(cap, inFlight)), independent of waiting shipment count.
+        for (Shipment shipment : inflight) {
             selected.add(shipment);
             if (selected.size() == cap) break;
         }
