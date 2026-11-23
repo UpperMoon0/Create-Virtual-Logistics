@@ -10,11 +10,12 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.storage.LevelResource;
 import net.minecraftforge.event.RegisterCommandsEvent;
 
-import java.io.FileOutputStream;
+import java.nio.channels.FileChannel;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.time.Instant;
 
 /**
@@ -71,9 +72,12 @@ public final class VirtualLogisticsCommands {
         Path destination = directory.resolve(name);
         Path temporary = directory.resolve(name + ".tmp");
         try {
-            try (FileOutputStream output = new FileOutputStream(temporary.toFile())) {
-                NbtIo.writeCompressed(VirtualLedger.get(level).save(new CompoundTag()), output);
-                output.getFD().sync();
+            // NbtIo.writeCompressed closes its OutputStream. Reopen for fsync;
+            // syncing the closed descriptor would throw SyncFailedException.
+            NbtIo.writeCompressed(VirtualLedger.get(level).save(new CompoundTag()),
+                temporary.toFile());
+            try (FileChannel channel = FileChannel.open(temporary, StandardOpenOption.WRITE)) {
+                channel.force(true);
             }
             Files.move(temporary, destination, StandardCopyOption.ATOMIC_MOVE);
         } catch (IOException error) {
