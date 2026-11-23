@@ -189,8 +189,8 @@ public final class VirtualLogisticsGameTests {
         port.target=new PackagePortTarget.ChainConveyorFrogportTarget(
             chain.getBlockPos().subtract(port.getBlockPos()),0,null);
         port.target.register(port,helper.getLevel(),port.getBlockPos());
-        var n = VirtualLedger.node(chain.getBlockPos());
-        var destination = VirtualLedger.node(port.getBlockPos());
+        var n = new TransportGraph.Node(chain.getBlockPos().getX(),chain.getBlockPos().getY(),chain.getBlockPos().getZ());
+        var destination = new TransportGraph.Node(port.getBlockPos().getX(),port.getBlockPos().getY(),port.getBlockPos().getZ());
         var route = new TransportGraph.Route(java.util.List.of(n),
             new TransportGraph.Endpoint(n,destination,"destination"),1);
         helper.assertTrue(dev.nstut.virtuallogistics.forge.VirtualTransportService
