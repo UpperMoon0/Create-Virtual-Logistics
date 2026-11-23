@@ -76,21 +76,28 @@ public final class VirtualTransportService {
         for (ServerLevel level : event.getServer().getAllLevels()) {
             VirtualLedger ledger = VirtualLedger.get(level);
             long now = level.getGameTime();
+            // Disabling the addon must freeze existing cargo, not silently deliver it.
+            // Operators may disable it for inspection without mutating inventories.
+            if (!VirtualLogisticsMod.ENABLED.get()) {
+                if (now % 10 == 0 && !level.players().isEmpty())
+                    sendEmptyVisuals(level);
+                continue;
+            }
             if (ledger.size() == 0) {
                 if (now % 10 == 0 && !level.players().isEmpty())
                     sendVisuals(level, ledger); // Clear previously rendered sample proxies.
                 continue;
             }
             ledger.restoreEngines(now);
-            if (VirtualLogisticsMod.ENABLED.get()) {
-                routePending(level, ledger, now);
-            }
+            routePending(level, ledger, now);
             int left = VirtualLogisticsMod.DELIVERY_BUDGET.get();
             // Advance every source clock, including sources whose deliveries are budget-deferred.
             for (var entry : ledger.active.entrySet()) {
                 var block = level.hasChunkAt(VirtualLedger.block(entry.getKey()))
                     ? level.getBlockEntity(VirtualLedger.block(entry.getKey())) : null;
-                double rpm = block instanceof ChainConveyorBlockEntity conveyor ? conveyor.getSpeed() : 0;
+                // Reverse rotation must not advance shipments toward the sink.
+                double rpm = block instanceof ChainConveyorBlockEntity conveyor
+                    ? Math.max(0, conveyor.getSpeed()) : 0;
                 entry.getValue().clock(now, rpm);
                 if (left > 0) {
                     var report = entry.getValue().deliverReady(now, left, RETRY_TICKS,
@@ -101,6 +108,11 @@ public final class VirtualTransportService {
             }
             if (now % 10 == 0) sendVisuals(level, ledger);
         }
+    }
+
+    private static void sendEmptyVisuals(ServerLevel level) {
+        for (ServerPlayer player : level.players())
+            CvlNetwork.send(player, new CvlNetwork.Visuals(List.of()));
     }
 
     private static void sendVisuals(ServerLevel level, VirtualLedger ledger) {
@@ -114,9 +126,12 @@ public final class VirtualTransportService {
                 if (startPos.distSqr(player.blockPosition()) > 128 * 128) continue;
                 var source = level.hasChunkAt(startPos) ? level.getBlockEntity(startPos) : null;
                 double speed = source instanceof ChainConveyorBlockEntity conveyor
-                    ? Math.abs(conveyor.getSpeed()) / 360.0 : 0;
+                    ? Math.max(0, conveyor.getSpeed()) / 360.0 : 0;
                 for (var shipment : engine.sample(cap - visuals.size())) {
                     var route = shipment.route();
+                    // Do not send a huge graph inside a visual packet.
+                    if (route.nodes().size() + 1 > CvlNetwork.MAX_VISUAL_ROUTE_NODES)
+                        continue;
                     double start = shipment.arrivalDistance() - route.distance();
                     double progress = Math.max(0, engine.odometer() - start);
                     visuals.add(new CvlNetwork.Sample(VirtualVisualMath.routePoints(route),progress,speed));
@@ -205,6 +220,8 @@ public final class VirtualTransportService {
 
     private static boolean deliver(ServerLevel level, VirtualTransportEngine.Shipment shipment) {
         TransportGraph.Route route = shipment.route();
+        // Reject stale routes rather than teleporting across broken infrastructure.
+        if (!routeStillConnected(level, route)) return false;
         BlockPos destination = VirtualLedger.block(route.endpoint().port());
         if (!level.hasChunkAt(destination)) return false;
         BlockEntity be = level.getBlockEntity(destination);
@@ -215,7 +232,7 @@ public final class VirtualTransportService {
             if (!PackageItem.matchAddress(cargo, frogport.getFilterString())) return false;
             // Prefer the actual crate/pipe below. Never allocate fake storage or exceed a Forge item handler.
             BlockPos below = destination.below();
-            if (level.hasChunkAt(below)) {
+            if (VirtualLogisticsMod.ALLOW_UNSAFE_EXTERNAL_INSERTION.get() && level.hasChunkAt(below)) {
                 BlockEntity inventory = level.getBlockEntity(below);
                 if (inventory != null) {
                     Optional<IItemHandler> handler = inventory.getCapability(ForgeCapabilities.ITEM_HANDLER,
@@ -231,6 +248,33 @@ public final class VirtualTransportService {
             // Retain pending cargo rather than discarding it.
         }
         return false;
+    }
+
+    /**
+     * Validate loaded infrastructure without chunk generation or forced loads.
+     * This is not yet a per-segment speed or topology-revision simulation.
+     */
+    private static boolean routeStillConnected(ServerLevel level, TransportGraph.Route route) {
+        List<TransportGraph.Node> path = route.nodes();
+        for (int i = 0; i < path.size(); i++) {
+            BlockPos pos = VirtualLedger.block(path.get(i));
+            if (!level.hasChunkAt(pos)) return false;
+            if (!(level.getBlockEntity(pos) instanceof ChainConveyorBlockEntity chain)
+                || chain.getSpeed() <= 0) return false;
+            if (i + 1 < path.size()) {
+                BlockPos next = VirtualLedger.block(path.get(i + 1));
+                BlockPos offset = next.subtract(pos);
+                if (!chain.connections.contains(offset) || !level.hasChunkAt(next)) return false;
+                if (!(level.getBlockEntity(next) instanceof ChainConveyorBlockEntity other)
+                    || !other.connections.contains(offset.multiply(-1))) return false;
+            } else {
+                BlockPos port = VirtualLedger.block(route.endpoint().port());
+                BlockPos offset = port.subtract(pos);
+                if (!chain.loopPorts.containsKey(offset) && !chain.travelPorts.containsKey(offset))
+                    return false;
+            }
+        }
+        return true;
     }
 
     private static boolean insertFully(IItemHandler handler, ItemStack stack) {
