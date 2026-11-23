@@ -135,6 +135,18 @@ public final class VirtualTransportService {
                     processedSources++;
                     if (report.attempted() > 0) ledger.setDirty();
                 }
+                // Use any leftover budget after the fair first pass. A source
+                // with no due packages must not waste capacity that another
+                // ready source could use in the same server tick.
+                if (left > 0) {
+                    for (int i = 0; i < sources.size() && left > 0; i++) {
+                        var entry = sources.get((start + i) % sources.size());
+                        var report = entry.getValue().deliverReady(now, left, RETRY_TICKS,
+                            shipment -> deliver(level, shipment));
+                        left -= report.attempted();
+                        if (report.attempted() > 0) ledger.setDirty();
+                    }
+                }
                 NEXT_SOURCE.put(level, (start + Math.max(1, processedSources)) % sources.size());
             }
             if (now % 10 == 0) sendVisuals(level, ledger);
