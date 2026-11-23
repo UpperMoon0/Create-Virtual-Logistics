@@ -544,4 +544,30 @@ public final class VirtualLogisticsGameTests {
         });
     }
 
+
+    @GameTest(template="empty",timeoutTicks=40)
+    public static void handlerExceptionAfterInsertionDoesNotRetryDuplicate(GameTestHelper helper) {
+        // Third-party handlers are disabled in production config, but a native
+        // Frogport SmartInventory may also notify after mutating its slot.
+        ItemStack box = PackageStyles.getDefaultBox();
+        var handler = new net.minecraftforge.items.ItemStackHandler(1) {
+            @Override
+            public ItemStack insertItem(int slot, ItemStack incoming, boolean simulate) {
+                ItemStack remainder=super.insertItem(slot,incoming,simulate);
+                if (!simulate && remainder.isEmpty())
+                    throw new IllegalStateException("onContentsChanged threw AFTER commit");
+                return remainder;
+            }
+        };
+        helper.assertTrue(dev.nstut.virtuallogistics.forge.VirtualTransportService
+            .insertFully(handler,box),
+            "A committed slot must be accepted despite post-insert notification error");
+        helper.assertTrue(handler.getStackInSlot(0).getCount()==1
+            && ItemStack.isSameItemSameTags(box,handler.getStackInSlot(0)),
+            "One package must remain, with no duplicate or changed NBT");
+        helper.assertTrue(!dev.nstut.virtuallogistics.forge.VirtualTransportService
+            .insertFully(handler,box), "Full slot incorrectly accepted duplicate package");
+        helper.succeed();
+    }
+
 }
