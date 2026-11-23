@@ -73,10 +73,11 @@ public final class VirtualTransportService {
     static ItemStack decode(byte[] bytes) throws IOException {
         if (bytes == null || bytes.length == 0 || bytes.length > MAX_CARGO_BYTES)
             throw new IOException("Invalid compressed shipment size");
-        try {
-            ItemStack cargo = ItemStack.of(NbtIo.readCompressed(
-                new ByteArrayInputStream(bytes),
-                new net.minecraft.nbt.NbtAccounter(MAX_UNCOMPRESSED_NBT_BYTES)));
+        try (var compressed = new java.util.zip.GZIPInputStream(new ByteArrayInputStream(bytes));
+             var input = new java.io.DataInputStream(compressed)) {
+            // Forge 1.20.1 has no readCompressed(stream, accounter) overload.
+            ItemStack cargo = ItemStack.of(NbtIo.read(
+                input, new net.minecraft.nbt.NbtAccounter(MAX_UNCOMPRESSED_NBT_BYTES)));
             if (cargo.isEmpty() || !PackageItem.isPackage(cargo) || cargo.getCount() != 1)
                 throw new IOException("Shipment no longer contains exactly one Create package");
             return cargo;
