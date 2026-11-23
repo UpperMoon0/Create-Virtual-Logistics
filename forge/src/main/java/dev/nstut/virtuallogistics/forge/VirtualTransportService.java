@@ -109,10 +109,10 @@ public final class VirtualTransportService {
             var sources = new ArrayList<>(ledger.active.entrySet());
             sources.sort(Map.Entry.comparingByKey());
             for (var entry : sources) {
-                var pos = VirtualLedger.block(entry.getKey());
-                var block = level.hasChunkAt(pos) ? level.getBlockEntity(pos) : null;
-                double rpm = block instanceof ChainConveyorBlockEntity conveyor
-                    ? Math.max(0, conveyor.getSpeed()) : 0;
+                // A source cannot outrun a slow, reversed, unloaded or broken
+                // segment. Group by unique active routes, not by all packages:
+                // O(routes * nodes), independent of logical throughput.
+                double rpm = effectiveRpm(level, entry.getValue());
                 double previousOdometer = entry.getValue().odometer();
                 entry.getValue().clock(now, rpm);
                 if (previousOdometer != entry.getValue().odometer()) ledger.setDirty();
@@ -138,6 +138,28 @@ public final class VirtualTransportService {
             }
             if (now % 10 == 0) sendVisuals(level, ledger);
         }
+    }
+
+    /**
+     * Fail closed when multiple Create chains have different rotational speeds.
+     * Full segment-by-segment scheduling is still required to support mixed RPM.
+     * No cargo advances through an unloaded, disconnected or unpowered leg.
+     */
+    public static double effectiveRpm(ServerLevel level, VirtualTransportEngine engine) {
+        double commonSpeed = -1;
+        for (var route : engine.activeRoutes()) {
+            if (!routeStillConnected(level, route)) return 0;
+            for (var node : route.nodes()) {
+                BlockEntity block = level.getBlockEntity(VirtualLedger.block(node));
+                if (!(block instanceof ChainConveyorBlockEntity chain)) return 0;
+                double speed = chain.getSpeed();
+                if (!(speed > 0) || !Double.isFinite(speed)) return 0;
+                if (commonSpeed >= 0 && Double.compare(commonSpeed, speed) != 0)
+                    return 0;
+                commonSpeed = speed;
+            }
+        }
+        return commonSpeed > 0 ? commonSpeed : 0;
     }
 
     private static void sendEmptyVisuals(ServerLevel level) {
