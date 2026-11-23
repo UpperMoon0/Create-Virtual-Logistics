@@ -1,5 +1,6 @@
 plugins {
     id 'eclipse'
+    id 'jacoco'
     id 'net.minecraftforge.gradle' version '[6.0,6.2)'
     id 'org.spongepowered.mixin' version '0.7.+'
     id 'org.parchmentmc.librarian.forgegradle' version '1.+'
@@ -33,6 +34,31 @@ minecraft {
         }
     }
 }
+
+jacoco { toolVersion = '0.8.12' }
+// Off by default for routine game tests. Pass -PnativeCoverage=true to
+// instrument our real Forge adapter under its classloader.
+tasks.matching { it.name == 'runGameTestServer' }.configureEach {
+    jacoco {
+        enabled = project.findProperty('nativeCoverage')?.toString() == 'true'
+        destinationFile = layout.buildDirectory.file(
+            'jacoco/forge-' + (fluidCompatibilityRun ? 'fluid' : 'base') + '.exec').get().asFile
+        append = false
+    }
+}
+tasks.register('nativeForgeCoverageReport', JacocoReport) {
+    group = 'verification'
+    description = 'Aggregate instrumented Forge GameTest adapter coverage (requires -PnativeCoverage=true).'
+    def base = layout.buildDirectory.file('jacoco/forge-base.exec')
+    def fluid = layout.buildDirectory.file('jacoco/forge-fluid.exec')
+    executionData.from(base, fluid)
+    sourceDirectories.from(layout.projectDirectory.dir('src/main/java'))
+    classDirectories.setFrom(files(sourceSets.main.output.classesDirs).asFileTree.matching {
+        exclude 'dev/nstut/virtuallogistics/core/**'
+    })
+    reports { xml.required = true; html.required = true }
+}
+
 repositories {
     maven { url = 'https://repo.spongepowered.org/repository/maven-public/' }
     maven { url = 'https://cursemaven.com' }
