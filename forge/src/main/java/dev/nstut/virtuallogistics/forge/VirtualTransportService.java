@@ -230,7 +230,7 @@ public final class VirtualTransportService {
         try {
             ItemStack cargo = decode(shipment.cargo());
             if (!PackageItem.matchAddress(cargo, frogport.getFilterString())) return false;
-            // Prefer the actual crate/pipe below. Never allocate fake storage or exceed a Forge item handler.
+            // Arbitrary external handlers are unsafe unless explicitly enabled for disposable tests.
             BlockPos below = destination.below();
             if (VirtualLogisticsMod.ALLOW_UNSAFE_EXTERNAL_INSERTION.get() && level.hasChunkAt(below)) {
                 BlockEntity inventory = level.getBlockEntity(below);
