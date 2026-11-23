@@ -126,4 +126,89 @@ public final class VirtualLogisticsGameTests {
                 "Chain must not accumulate physical Create packages");
         });
     }
+
+    /**
+     * Representative legacy-NBT package payloads. This proves the addon is byte
+     * transparent; it does not substitute for running Fluid Logistics/GT itself.
+     */
+    @GameTest(template="empty",timeoutTicks=40)
+    public static void preservesOrderAndFluidPayloadNbt(GameTestHelper helper) {
+        BlockPos source = new BlockPos(1,1,1);
+        helper.setBlock(source, AllBlocks.CHAIN_CONVEYOR.getDefaultState());
+        var chain = (ChainConveyorBlockEntity)helper.getBlockEntity(source);
+        String[] fluids = {"gtceu:oxygen","gtceu:hydrogen","gtceu:nitrogen","gtceu:nitric_acid"};
+        var ledger = VirtualLedger.get(helper.getLevel());
+        int before = ledger.pending.size();
+        for (int i=0; i<fluids.length; i++) {
+            ItemStack box = PackageStyles.getDefaultBox();
+            PackageItem.addAddress(box,"0_hno3");
+            CompoundTag order = box.getOrCreateTag();
+            order.putInt("OrderId", 8321);
+            order.putInt("LinkIndex", 2);
+            order.putInt("FragmentIndex", i);
+            order.putBoolean("IsFinal", i==fluids.length-1);
+            CompoundTag fluid = new CompoundTag();
+            fluid.putString("FluidName",fluids[i]);
+            fluid.putLong("Amount",4_000_000L + i);
+            order.put("FluidLogisticsTestPayload",fluid);
+            if (!chain.addLoopingPackage(new ChainConveyorPackage(0,box)))
+                helper.fail("Failed to capture modded package "+i);
+            try {
+                ItemStack expected = box;
+                byte[] bytes = ledger.pending.values().stream().reduce((first,last)->last).orElseThrow().cargo();
+                ItemStack recovered = ItemStack.of(net.minecraft.nbt.NbtIo.readCompressed(
+                    new java.io.ByteArrayInputStream(bytes)));
+                if (!ItemStack.isSameItemSameTags(expected, recovered)
+                    || expected.getCount()!=recovered.getCount())
+                    helper.fail("NBT or package count changed for "+fluids[i]);
+            } catch (java.io.IOException ex) {
+                helper.fail("Could not decode captured package: "+ex);
+            }
+        }
+        helper.assertTrue(ledger.pending.size()==before+fluids.length,
+            "Expected four independent preserved shipments");
+        helper.succeed();
+    }
+
+    @GameTest(template="empty",timeoutTicks=180)
+    public static void removingPortConnectionMustNotTeleportPackage(GameTestHelper helper) {
+        BlockPos source = new BlockPos(1,1,1);
+        BlockPos portPosition = new BlockPos(2,1,1);
+        BlockPos motorPosition = new BlockPos(1,0,1);
+        helper.setBlock(motorPosition, AllBlocks.CREATIVE_MOTOR.getDefaultState()
+            .setValue(CreativeMotorBlock.FACING, Direction.UP));
+        helper.setBlock(source, AllBlocks.CHAIN_CONVEYOR.getDefaultState());
+        helper.setBlock(portPosition, AllBlocks.PACKAGE_FROGPORT.getDefaultState());
+        var chain = (ChainConveyorBlockEntity)helper.getBlockEntity(source);
+        var port = (FrogportBlockEntity)helper.getBlockEntity(portPosition);
+        var motor = (CreativeMotorBlockEntity)helper.getBlockEntity(motorPosition);
+        motor.generatedSpeed.setValue(4);
+        motor.updateGeneratedRotation();
+        port.acceptsPackages = true;
+        port.addressFilter = "destination";
+        port.target = new PackagePortTarget.ChainConveyorFrogportTarget(
+            chain.getBlockPos().subtract(port.getBlockPos()),0,null);
+        port.target.register(port,helper.getLevel(),port.getBlockPos());
+        ItemStack box = PackageStyles.getDefaultBox();
+        PackageItem.addAddress(box,"destination");
+        if (!chain.addLoopingPackage(new ChainConveyorPackage(0,box)))
+            helper.fail("Capture failed");
+        // The pending queue should resolve before tick 30, but travel takes 90 ticks.
+        helper.runAfterDelay(30, () -> {
+            if (chain.loopPorts.isEmpty() && chain.travelPorts.isEmpty())
+                helper.fail("Test did not register port to remove");
+            chain.loopPorts.clear();
+            chain.travelPorts.clear();
+        });
+        helper.runAfterDelay(145, () -> {
+            int count = 0;
+            for (int i=0;i<port.inventory.getSlots();i++)
+                count += port.inventory.getStackInSlot(i).getCount();
+            helper.assertTrue(count==0, "Stale path delivered despite removed port link");
+            helper.assertTrue(VirtualLedger.get(helper.getLevel()).size()>=1,
+                "Shipment vanished after route invalidation");
+            helper.succeed();
+        });
+    }
+
 }
