@@ -17,7 +17,7 @@ import java.util.function.Supplier;
 
 /** Sampled visuals only. No inventory contents or authoritative transport state go to clients. */
 public final class CvlNetwork {
-    private static final String VERSION = "1";
+    private static final String VERSION = "2";
     public static final int MAX_VISUAL_ROUTE_NODES = 96;
     public static final int MAX_VISUAL_SAMPLES = 64;
     private static final SimpleChannel CHANNEL = NetworkRegistry.ChannelBuilder
