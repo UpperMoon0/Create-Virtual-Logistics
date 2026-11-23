@@ -1,0 +1,12 @@
+allprojects {
+    group = 'dev.nstut'
+    version = '0.1.0'
+    repositories { mavenCentral() }
+}
+subprojects {
+    tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8' }
+}
+tasks.register('verify', GradleBuild) {
+    description = 'JVM unit tests, coverage verification, and Forge artifact build'
+    tasks = [':core:check', ':forge:build']
+}

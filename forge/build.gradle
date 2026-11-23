@@ -1,0 +1,58 @@
+plugins {
+    id 'eclipse'
+    id 'net.minecraftforge.gradle' version '[6.0,6.2)'
+    id 'org.spongepowered.mixin' version '0.7.+'
+    id 'org.parchmentmc.librarian.forgegradle' version '1.+'
+}
+java { toolchain.languageVersion = JavaLanguageVersion.of(17) }
+archivesBaseName = 'create-virtual-logistics-forge-1.20.1'
+minecraft {
+    mappings channel: 'parchment', version: '2023.09.03-1.20.1'
+    runs {
+        configureEach {
+            workingDirectory project.file('run')
+            property 'forge.logging.console.level', 'info'
+            property 'mixin.env.remapRefMap', 'true'
+            property 'mixin.env.refMapRemappingFile', file('build/createSrgToMcp/output.srg').absolutePath
+            mods { createvirtuallogistics { source sourceSets.main } }
+        }
+        client {}
+        server { arg '--nogui' }
+        gameTestServer {
+            workingDirectory project.file('run-gametest')
+            property 'forge.enabledGameTestNamespaces', 'createvirtuallogistics'
+        }
+    }
+}
+repositories {
+    maven { url = 'https://repo.spongepowered.org/repository/maven-public/' }
+    maven { url = 'https://maven.tterrag.com/' }
+    maven { url = 'https://maven.createmod.net' }
+    maven { url = 'https://maven.parchmentmc.org' }
+}
+dependencies {
+    minecraft 'net.minecraftforge:forge:' + minecraft_version + '-' + forge_version
+    annotationProcessor 'org.spongepowered:mixin:0.8.7:processor'
+    implementation project(':core')
+    implementation(fg.deobf('com.simibubi.create:create-' + minecraft_version + ':' + create_version + ':slim')) { transitive = false }
+    implementation fg.deobf('net.createmod.ponder:Ponder-Forge-' + minecraft_version + ':' + ponder_version)
+    compileOnly fg.deobf('dev.engine-room.flywheel:flywheel-forge-api-' + minecraft_version + ':' + flywheel_version)
+    runtimeOnly fg.deobf('dev.engine-room.flywheel:flywheel-forge-' + minecraft_version + ':' + flywheel_version)
+    implementation fg.deobf('com.tterrag.registrate:Registrate:' + registrate_version)
+}
+mixin {
+    add sourceSets.main, 'createvirtuallogistics-refmap.json'
+    config 'createvirtuallogistics.mixins.json'
+}
+tasks.named('jar') {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from(project(':core').sourceSets.main.output)
+    dependsOn ':core:classes'
+    manifest.attributes([
+        'MixinConfigs': 'createvirtuallogistics.mixins.json',
+        'Specification-Title': 'createvirtuallogistics',
+        'Specification-Version': '1',
+        'Implementation-Version': project.version
+    ])
+    finalizedBy 'reobfJar'
+}

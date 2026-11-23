@@ -1,0 +1,9 @@
+.gradle/
+**/build/
+.idea/
+*.iml
+run/
+run-gametest/
+.DS_Store
+logs/
+*.log

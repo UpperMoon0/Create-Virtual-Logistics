@@ -1,0 +1,10 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "dev.nstut.virtuallogistics.forge.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "refmap": "createvirtuallogistics-refmap.json",
+  "mixins": ["ChainConveyorMixin"],
+  "client": [],
+  "injectors": {"defaultRequire": 1}
+}
