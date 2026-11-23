@@ -74,7 +74,8 @@ public final class VirtualTransportEngine {
         if (nowTick < lastTick) throw new IllegalArgumentException("World clock moved backwards");
         if (!Double.isFinite(rpm)) throw new IllegalArgumentException("Invalid RPM");
         // Create chain movement: |RPM / 360| blocks per game tick.
-        odometer += (nowTick - lastTick) * Math.abs(rpm) / 360.0;
+        // Reversed networks must not advance forward deadlines until reverse paths are modeled.
+        odometer += (nowTick - lastTick) * Math.max(0, rpm) / 360.0;
         lastTick = nowTick;
     }
 
