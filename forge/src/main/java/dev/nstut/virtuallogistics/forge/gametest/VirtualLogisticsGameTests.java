@@ -1,6 +1,9 @@
 package dev.nstut.virtuallogistics.forge.gametest;
 
 import com.simibubi.create.AllBlocks;
+import com.simibubi.create.content.kinetics.motor.CreativeMotorBlock;
+import com.simibubi.create.content.kinetics.motor.CreativeMotorBlockEntity;
+import net.minecraft.core.Direction;
 import com.simibubi.create.content.kinetics.chainConveyor.ChainConveyorBlockEntity;
 import com.simibubi.create.content.kinetics.chainConveyor.ChainConveyorPackage;
 import com.simibubi.create.content.logistics.box.PackageItem;
@@ -86,11 +89,16 @@ public final class VirtualLogisticsGameTests {
     public static void realChainRouteDeliversSixteenWithoutFrogAnimation(GameTestHelper helper) {
         BlockPos sourcePosition = new BlockPos(1,1,1);
         BlockPos portPosition = new BlockPos(2,1,1);
+        BlockPos motorPosition = new BlockPos(1,0,1);
+        helper.setBlock(motorPosition, AllBlocks.CREATIVE_MOTOR.getDefaultState()
+            .setValue(CreativeMotorBlock.FACING, Direction.UP));
         helper.setBlock(sourcePosition,AllBlocks.CHAIN_CONVEYOR.getDefaultState());
         helper.setBlock(portPosition,AllBlocks.PACKAGE_FROGPORT.getDefaultState());
         var chain = (ChainConveyorBlockEntity)helper.getBlockEntity(sourcePosition);
         var port = (FrogportBlockEntity)helper.getBlockEntity(portPosition);
-        chain.setSpeed(128);
+        var motor = (CreativeMotorBlockEntity)helper.getBlockEntity(motorPosition);
+        motor.generatedSpeed.setValue(128);
+        motor.updateGeneratedRotation();
         port.acceptsPackages=true;
         port.addressFilter="destination";
         port.target=new PackagePortTarget.ChainConveyorFrogportTarget(
@@ -106,7 +114,14 @@ public final class VirtualLogisticsGameTests {
             int received=0;
             for (int i=0;i<port.inventory.getSlots();i++)
                 received += port.inventory.getStackInSlot(i).getCount();
-            helper.assertTrue(received==16,"16 cargo manifests must reach the real Frogport inventory");
+            var currentLedger = VirtualLedger.get(helper.getLevel());
+            int queued = currentLedger.pending.size();
+            int flying = currentLedger.active.values().stream().mapToInt(e -> e.inFlight()).sum();
+            int waiting = currentLedger.active.values().stream().mapToInt(e -> e.waiting()).sum();
+            helper.assertTrue(received==16, "Expected 16 cargo; received=" + received
+                + " pending=" + queued + " flying=" + flying + " waiting=" + waiting
+                + " rpm=" + chain.getSpeed() + " ports=" + chain.loopPorts.size()
+                + " portTarget=" + (port.target == null ? "null" : port.target.getClass().getSimpleName()));
             helper.assertTrue(chain.getLoopingPackages().isEmpty(),
                 "Chain must not accumulate physical Create packages");
         });

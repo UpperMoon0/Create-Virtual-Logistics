@@ -65,3 +65,11 @@ def prepareGameTestStructure = tasks.register('prepareGameTestStructure', Copy) 
 tasks.matching { it.name == 'runGameTestServer' }.configureEach {
     dependsOn prepareGameTestStructure
 }
+
+def prepareGameTestConfig = tasks.register('prepareGameTestConfig', Copy) {
+    from layout.projectDirectory.dir('src/gametest/config')
+    into layout.projectDirectory.dir('run-gametest/config')
+}
+tasks.matching { it.name == 'runGameTestServer' }.configureEach {
+    dependsOn prepareGameTestConfig
+}

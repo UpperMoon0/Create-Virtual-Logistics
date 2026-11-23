@@ -18,7 +18,6 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraftforge.common.capabilities.ForgeCapabilities;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.items.IItemHandler;
-import net.minecraftforge.items.ItemHandlerHelper;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -48,7 +47,8 @@ public final class VirtualTransportService {
     private VirtualTransportService() {}
 
     public static boolean capture(ServerLevel level, ChainConveyorBlockEntity origin, ChainConveyorPackage packageToMove) {
-        if (packageToMove == null || packageToMove.item.isEmpty() || !PackageItem.isPackage(packageToMove.item))
+        if (packageToMove == null || packageToMove.item.isEmpty()
+            || !PackageItem.isPackage(packageToMove.item) || packageToMove.item.getCount() != 1)
             return false;
         try {
             // The serialized ItemStack, including fluid, fragment and order metadata, is owned by the ledger.
@@ -75,8 +75,12 @@ public final class VirtualTransportService {
         if (event.phase != TickEvent.Phase.END) return;
         for (ServerLevel level : event.getServer().getAllLevels()) {
             VirtualLedger ledger = VirtualLedger.get(level);
-            if (ledger.size() == 0) continue;
             long now = level.getGameTime();
+            if (ledger.size() == 0) {
+                if (now % 10 == 0 && !level.players().isEmpty())
+                    sendVisuals(level, ledger); // Clear previously rendered sample proxies.
+                continue;
+            }
             ledger.restoreEngines(now);
             if (VirtualLogisticsMod.ENABLED.get()) {
                 routePending(level, ledger, now);
@@ -230,8 +234,15 @@ public final class VirtualTransportService {
     }
 
     private static boolean insertFully(IItemHandler handler, ItemStack stack) {
-        if (!ItemHandlerHelper.insertItemStacked(handler, stack.copy(), true).isEmpty()) return false;
-        ItemStack remainder = ItemHandlerHelper.insertItemStacked(handler, stack.copy(), false);
-        return remainder.isEmpty();
+        // Create packages are non-stackable. A single-item slot insertion cannot partially
+        // succeed, even if a neighbouring mod changes its handler between simulate/execute.
+        if (stack.isEmpty() || stack.getCount() != 1) return false;
+        for (int slot = 0; slot < handler.getSlots(); slot++) {
+            if (!handler.isItemValid(slot, stack)) continue;
+            ItemStack simulated = handler.insertItem(slot, stack.copy(), true);
+            if (!simulated.isEmpty()) continue;
+            return handler.insertItem(slot, stack.copy(), false).isEmpty();
+        }
+        return false;
     }
 }

@@ -2,7 +2,7 @@
 
 A separate **Forge 1.20.1 / Create 6.0.8** addon providing logical, time-based chain conveyor cargo transport. The chains remain real infrastructure. Packages take time to traverse physical routes at Create's block-per-tick speed, but **physical per-node package queues no longer limit throughput**.
 
-> **Experimental; do not deploy to an irreplaceable world.** This is a source-level prototype with a tested independent transport core. Runtime GameTest acceptance, crash consistency, and Fluid Logistics compatibility must be proven before production use.
+> **Experimental; disabled by default; do not deploy to an irreplaceable world.** This is a source-level prototype with a tested independent transport core. Runtime GameTest acceptance, crash consistency, and Fluid Logistics compatibility must be proven before production use.
 
 ## Architecture
 
@@ -27,6 +27,13 @@ A separate **Forge 1.20.1 / Create 6.0.8** addon providing logical, time-based c
 - This addon does not yet replace Create's FactoryPanel demand algorithm or Fluid Logistics package fragmentation/reassembly.
 
 These are **release blockers**, not optional polish.
+
+## Opt-in switch
+
+The common config property enabled defaults to false, even on servers.
+Only enable in disposable test worlds until native conservation and crash
+recovery are certified. Forge GameTests automatically supply an isolated
+enabled=true config; no live world config is altered.
 
 ## Build and test
 

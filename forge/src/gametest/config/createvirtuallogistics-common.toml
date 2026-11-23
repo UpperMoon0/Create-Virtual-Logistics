@@ -1,0 +1,4 @@
+# Enable only inside disposable isolated Forge GameTest worlds.
+enabled = true
+deliveryBudgetPerTick = 128
+renderCap = 24
