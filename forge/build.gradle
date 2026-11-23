@@ -57,7 +57,7 @@ afterEvaluate {
     if (project.findProperty('nativeCoverage')?.toString() == 'true') {
         // ForgeGradle configures its bundled maven repository late. Resolving
         // JaCoCo while the run extension is declared breaks that setup.
-        def agent = configurations.jacocoAgent.singleFile
+        def agent = configurations.jacocoRuntimeAgent.singleFile
         def destination = layout.buildDirectory.file(
             'jacoco/forge-' + (fluidCompatibilityRun ? 'fluid' : 'base') + '.exec').get().asFile
         destination.parentFile.mkdirs()
@@ -73,7 +73,9 @@ repositories {
     maven { url = 'https://maven.createmod.net' }
     maven { url = 'https://maven.parchmentmc.org' }
 }
+configurations { jacocoRuntimeAgent }
 dependencies {
+    jacocoRuntimeAgent 'org.jacoco:org.jacoco.agent:0.8.12:runtime'
     minecraft 'net.minecraftforge:forge:' + minecraft_version + '-' + forge_version
     annotationProcessor 'org.spongepowered:mixin:0.8.7:processor'
     compileOnly(annotationProcessor('io.github.llamalad7:mixinextras-common:0.5.0-rc.3'))
