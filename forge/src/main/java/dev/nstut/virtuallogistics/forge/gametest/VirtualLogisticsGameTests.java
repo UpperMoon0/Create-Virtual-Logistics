@@ -629,4 +629,70 @@ public final class VirtualLogisticsGameTests {
         helper.succeed();
     }
 
+
+    @GameTest(template="empty",timeoutTicks=40)
+    public static void visualNetworkRoundTripAndBoundsCannotOverflowClient(GameTestHelper helper) {
+        try {
+            var node = new TransportGraph.Node(5,6,7);
+            var proxy = new dev.nstut.virtuallogistics.forge.CvlNetwork.Sample(
+                java.util.List.of(node), 0.75, 0.25);
+            var packet = new dev.nstut.virtuallogistics.forge.CvlNetwork.Visuals(
+                java.util.List.of(proxy));
+            var encoder = dev.nstut.virtuallogistics.forge.CvlNetwork.class.getDeclaredMethod(
+                "encode",dev.nstut.virtuallogistics.forge.CvlNetwork.Visuals.class,
+                net.minecraft.network.FriendlyByteBuf.class);
+            var decoder = dev.nstut.virtuallogistics.forge.CvlNetwork.class.getDeclaredMethod(
+                "decode",net.minecraft.network.FriendlyByteBuf.class);
+            encoder.setAccessible(true);
+            decoder.setAccessible(true);
+            var buffer=new net.minecraft.network.FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+            encoder.invoke(null,packet,buffer);
+            var recovered=(dev.nstut.virtuallogistics.forge.CvlNetwork.Visuals)
+                decoder.invoke(null,buffer);
+            helper.assertTrue(recovered.equals(packet),
+                "Visual serialization changed bounded location/movement");
+            boolean rejected=false;
+            try {
+                new dev.nstut.virtuallogistics.forge.CvlNetwork.Visuals(
+                    java.util.Collections.nCopies(65,proxy));
+            } catch(IllegalArgumentException e) { rejected=true; }
+            helper.assertTrue(rejected, "Server encoded more than 64 proxies");
+            rejected=false;
+            try {
+                new dev.nstut.virtuallogistics.forge.CvlNetwork.Sample(
+                    java.util.Collections.nCopies(97,node),0,0);
+            } catch(IllegalArgumentException e) { rejected=true; }
+            helper.assertTrue(rejected, "Server encoded oversized route");
+            rejected=false;
+            try {
+                new dev.nstut.virtuallogistics.forge.CvlNetwork.Sample(
+                    java.util.List.of(node),Double.NaN,0);
+            } catch(IllegalArgumentException e) { rejected=true; }
+            helper.assertTrue(rejected, "NaN visual movement was permitted");
+
+            var excessive=new net.minecraft.network.FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+            excessive.writeVarInt(65);
+            try {
+                decoder.invoke(null,excessive);
+                helper.fail("Client accepted oversized visual sample packet");
+            } catch(java.lang.reflect.InvocationTargetException expected) {
+                helper.assertTrue(expected.getCause() instanceof IllegalArgumentException,
+                    "Unexpected visual sample rejection");
+            }
+            var longRoute=new net.minecraft.network.FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+            longRoute.writeVarInt(1);
+            longRoute.writeVarInt(97);
+            try {
+                decoder.invoke(null,longRoute);
+                helper.fail("Client accepted oversized visual route packet");
+            } catch(java.lang.reflect.InvocationTargetException expected) {
+                helper.assertTrue(expected.getCause() instanceof IllegalArgumentException,
+                    "Unexpected visual route rejection");
+            }
+            helper.succeed();
+        } catch(ReflectiveOperationException error) {
+            helper.fail("Bounded visual serialization regression: " + error);
+        }
+    }
+
 }
