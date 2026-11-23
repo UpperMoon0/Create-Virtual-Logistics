@@ -208,4 +208,31 @@ public final class VirtualLogisticsGameTests {
         helper.succeed();
     }
 
+
+    @GameTest(template="empty",timeoutTicks=40)
+    public static void exportsAuditableLedgerSnapshotToIsolatedWorld(GameTestHelper helper) {
+        var ledger = VirtualLedger.get(helper.getLevel());
+        byte[] unique = new byte[]{78, 83, 84, 117, 116, 36};
+        ledger.capture(new TransportGraph.Node(11,12,13),unique);
+        java.nio.file.Path backup = null;
+        try {
+            backup = dev.nstut.virtuallogistics.forge.VirtualLogisticsCommands
+                .exportSnapshot(helper.getLevel());
+            helper.assertTrue(java.nio.file.Files.size(backup)>0, "Empty snapshot export");
+            var restored = VirtualLedger.load(net.minecraft.nbt.NbtIo.readCompressed(
+                new java.io.FileInputStream(backup.toFile())));
+            helper.assertTrue(restored.pending.values().stream()
+                .anyMatch(p -> java.util.Arrays.equals(p.cargo(),unique)),
+                "Exported cargo was lost or modified");
+            helper.succeed();
+        } catch (java.io.IOException ex) {
+            helper.fail("Could not export recovery snapshot: "+ex);
+        } finally {
+            if (backup != null) {
+                try { java.nio.file.Files.deleteIfExists(backup); }
+                catch (java.io.IOException ignored) { }
+            }
+        }
+    }
+
 }
