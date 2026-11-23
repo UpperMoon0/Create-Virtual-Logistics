@@ -29,5 +29,6 @@ public final class VirtualLogisticsMod {
         CvlNetwork.init();
         ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, CONFIG);
         MinecraftForge.EVENT_BUS.addListener(VirtualTransportService::onServerTick);
+        MinecraftForge.EVENT_BUS.addListener(VirtualLogisticsCommands::register);
     }
 }
