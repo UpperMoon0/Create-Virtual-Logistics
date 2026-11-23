@@ -239,4 +239,20 @@ public final class VirtualLogisticsGameTests {
         }
     }
 
+
+    @GameTest(template="empty",timeoutTicks=40)
+    public static void requiresPinnedFluidLogisticsWhenCompatibilityGateEnabled(GameTestHelper helper) {
+        String requiredVersion = System.getProperty("cvl.requireFluidLogistics", "");
+        if (!requiredVersion.isEmpty()) {
+            var loaded = net.minecraftforge.fml.ModList.get()
+                .getModContainerById("fluidlogistics");
+            helper.assertTrue(loaded.isPresent(), "Pinned Fluid Logistics not loaded in real Forge runtime");
+            String actualVersion = loaded.orElseThrow().getModInfo().getVersion().toString();
+            helper.assertTrue(actualVersion.equals(requiredVersion),
+                "Fluid Logistics release mismatch: expected " + requiredVersion +
+                ", actual " + actualVersion);
+        }
+        helper.succeed();
+    }
+
 }
