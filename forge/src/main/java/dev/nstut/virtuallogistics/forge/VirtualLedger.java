@@ -47,6 +47,14 @@ public final class VirtualLedger extends SavedData {
         });
     }
 
+    /** Reattach all restored clocks at the current game tick, never accounting for offline time. */
+    public void restoreEngines(long currentTick) {
+        if (unloaded.isEmpty()) return;
+        unloaded.forEach((source, snapshot) -> active.put(source,
+            VirtualTransportEngine.restore(snapshot, currentTick)));
+        unloaded.clear();
+    }
+
     public int size() {
         int n = pending.size();
         for (var engine : active.values()) n += engine.size();

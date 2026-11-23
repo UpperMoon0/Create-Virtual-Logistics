@@ -101,9 +101,34 @@ class VirtualTransportEngineTest {
         assertThrows(IllegalArgumentException.class,()->engine.deliverReady(0,1,0,s->true).delivered());
         assertThrows(IllegalArgumentException.class,()->VirtualTransportEngine.restore(
             new VirtualTransportEngine.Snapshot(-1,0,List.of()),1));
+        assertThrows(IllegalArgumentException.class,()->VirtualTransportEngine.restore(
+            new VirtualTransportEngine.Snapshot(Double.NaN,0,List.of()),1));
         var id=UUID.randomUUID();
         var shipment=new VirtualTransportEngine.Shipment(id,new byte[]{1},ROUTE,20,VirtualTransportEngine.Status.IN_TRANSIT,0);
         engine.submit(shipment);
         assertThrows(IllegalArgumentException.class,()->engine.submit(shipment));
+    }
+
+    @Test void restoredWaitingShipmentPreservesRetriedCargoAndDoesNotRender() {
+        var engine=new VirtualTransportEngine(0);
+        var id=UUID.randomUUID();
+        var waiting=new VirtualTransportEngine.Shipment(id,new byte[]{9},ROUTE,20,
+            VirtualTransportEngine.Status.WAITING_FOR_STORAGE,123);
+        engine.submit(waiting);
+        assertEquals(1,engine.waiting());
+        assertEquals(1,engine.shipments().size());
+        assertTrue(engine.sample(32).isEmpty());
+        var roundtrip=VirtualTransportEngine.restore(engine.snapshot(),1000);
+        assertEquals(0,roundtrip.deliverReady(120,1,5,s->true).attempted());
+        assertEquals(1,roundtrip.deliverReady(123,1,5,s->true).delivered());
+    }
+
+    @Test void malformedShipmentDistanceIsRejected() {
+        assertThrows(IllegalArgumentException.class,()->new VirtualTransportEngine.Shipment(
+            UUID.randomUUID(),new byte[0],ROUTE,Double.POSITIVE_INFINITY,
+            VirtualTransportEngine.Status.IN_TRANSIT,0));
+        assertThrows(IllegalArgumentException.class,()->new VirtualTransportEngine.Shipment(
+            UUID.randomUUID(),new byte[0],ROUTE,-5,
+            VirtualTransportEngine.Status.IN_TRANSIT,0));
     }
 }

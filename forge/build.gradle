@@ -5,6 +5,8 @@ plugins {
     id 'org.parchmentmc.librarian.forgegradle' version '1.+'
 }
 java { toolchain.languageVersion = JavaLanguageVersion.of(17) }
+// Core classes must be part of the mod's module classloader during Forge dev runs.
+sourceSets.main.java.srcDir rootProject.file('core/src/main/java')
 archivesBaseName = 'create-virtual-logistics-forge-1.20.1'
 minecraft {
     mappings channel: 'parchment', version: '2023.09.03-1.20.1'
@@ -33,7 +35,8 @@ repositories {
 dependencies {
     minecraft 'net.minecraftforge:forge:' + minecraft_version + '-' + forge_version
     annotationProcessor 'org.spongepowered:mixin:0.8.7:processor'
-    implementation project(':core')
+    compileOnly(annotationProcessor('io.github.llamalad7:mixinextras-common:0.5.0-rc.3'))
+    implementation fg.deobf('io.github.llamalad7:mixinextras-forge:0.5.0-rc.3')
     implementation(fg.deobf('com.simibubi.create:create-' + minecraft_version + ':' + create_version + ':slim')) { transitive = false }
     implementation fg.deobf('net.createmod.ponder:Ponder-Forge-' + minecraft_version + ':' + ponder_version)
     compileOnly fg.deobf('dev.engine-room.flywheel:flywheel-forge-api-' + minecraft_version + ':' + flywheel_version)
@@ -46,8 +49,6 @@ mixin {
 }
 tasks.named('jar') {
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
-    from(project(':core').sourceSets.main.output)
-    dependsOn ':core:classes'
     manifest.attributes([
         'MixinConfigs': 'createvirtuallogistics.mixins.json',
         'Specification-Title': 'createvirtuallogistics',
@@ -55,4 +56,12 @@ tasks.named('jar') {
         'Implementation-Version': project.version
     ])
     finalizedBy 'reobfJar'
+}
+
+def prepareGameTestStructure = tasks.register('prepareGameTestStructure', Copy) {
+    from layout.projectDirectory.dir('src/gametest/resources')
+    into layout.projectDirectory.dir('run-gametest/gameteststructures')
+}
+tasks.matching { it.name == 'runGameTestServer' }.configureEach {
+    dependsOn prepareGameTestStructure
 }

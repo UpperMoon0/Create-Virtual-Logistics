@@ -5,6 +5,8 @@ import com.simibubi.create.content.kinetics.chainConveyor.ChainConveyorBlockEnti
 import com.simibubi.create.content.kinetics.chainConveyor.ChainConveyorPackage;
 import com.simibubi.create.content.logistics.box.PackageItem;
 import com.simibubi.create.content.logistics.box.PackageStyles;
+import com.simibubi.create.content.logistics.packagePort.PackagePortTarget;
+import com.simibubi.create.content.logistics.packagePort.frogport.FrogportBlockEntity;
 import dev.nstut.virtuallogistics.core.TransportGraph;
 import dev.nstut.virtuallogistics.forge.VirtualLedger;
 import dev.nstut.virtuallogistics.forge.VirtualLogisticsMod;
@@ -53,5 +55,60 @@ public final class VirtualLogisticsGameTests {
         if (!pending.source().equals(source) || !java.util.Arrays.equals(pending.cargo(),new byte[]{5,6,7}))
             helper.fail("Cargo payload damaged by persistence");
         helper.succeed();
+    }
+
+    @GameTest(template="empty",timeoutTicks=40)
+    public static void restoresActiveInFlightCargoWithoutOfflineMovement(GameTestHelper helper) {
+        var ledger = new VirtualLedger();
+        var source = new TransportGraph.Node(0,1,0);
+        var destination = new TransportGraph.Node(20,1,0);
+        var route = new TransportGraph.Route(java.util.List.of(source,destination),
+            new TransportGraph.Endpoint(destination,destination,"test"),20);
+        var engine = ledger.engine(source, 0);
+        engine.submit(new byte[]{1,2,3},route);
+        engine.clock(10,360);
+        var stored = ledger.save(new CompoundTag());
+        var restored = VirtualLedger.load(stored);
+        restored.restoreEngines(10000);
+        var recovered = restored.active.get(source);
+        if (recovered == null || recovered.size()!=1 || recovered.odometer()!=10)
+            helper.fail("In-flight cargo was not restored after restart");
+        recovered.clock(10009,360);
+        if (recovered.deliverReady(10009,2,20,s->true).delivered()!=0)
+            helper.fail("Cargo traversed distance while server was offline");
+        recovered.clock(10010,360);
+        if (recovered.deliverReady(10010,2,20,s->true).delivered()!=1)
+            helper.fail("Cargo failed to resume after persisted world load");
+        helper.succeed();
+    }
+
+    @GameTest(template="empty",timeoutTicks=160)
+    public static void realChainRouteDeliversSixteenWithoutFrogAnimation(GameTestHelper helper) {
+        BlockPos sourcePosition = new BlockPos(1,1,1);
+        BlockPos portPosition = new BlockPos(2,1,1);
+        helper.setBlock(sourcePosition,AllBlocks.CHAIN_CONVEYOR.getDefaultState());
+        helper.setBlock(portPosition,AllBlocks.PACKAGE_FROGPORT.getDefaultState());
+        var chain = (ChainConveyorBlockEntity)helper.getBlockEntity(sourcePosition);
+        var port = (FrogportBlockEntity)helper.getBlockEntity(portPosition);
+        chain.setSpeed(128);
+        port.acceptsPackages=true;
+        port.addressFilter="destination";
+        port.target=new PackagePortTarget.ChainConveyorFrogportTarget(
+            chain.getBlockPos().subtract(port.getBlockPos()),0,null);
+        port.target.register(port,helper.getLevel(),port.getBlockPos());
+        for (int i=0;i<16;i++) {
+            ItemStack box = PackageStyles.getDefaultBox();
+            PackageItem.addAddress(box,"destination");
+            if (!chain.addLoopingPackage(new ChainConveyorPackage(0,box)))
+                helper.fail("Virtual conveyor rejected package " + i);
+        }
+        helper.succeedWhen(() -> {
+            int received=0;
+            for (int i=0;i<port.inventory.getSlots();i++)
+                received += port.inventory.getStackInSlot(i).getCount();
+            helper.assertTrue(received==16,"16 cargo manifests must reach the real Frogport inventory");
+            helper.assertTrue(chain.getLoopingPackages().isEmpty(),
+                "Chain must not accumulate physical Create packages");
+        });
     }
 }

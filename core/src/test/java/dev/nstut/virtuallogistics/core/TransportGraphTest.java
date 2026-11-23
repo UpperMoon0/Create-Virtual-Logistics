@@ -55,4 +55,74 @@ class TransportGraphTest {
         assertThrows(IllegalArgumentException.class,()->new TransportGraph.Route(List.of(A),new TransportGraph.Endpoint(A,A,"x"),-1));
         assertEquals(5,A.distanceTo(new TransportGraph.Node(3,4,0)));
     }
+
+    @Test void comparatorOrdersCoordinatesLexicographically() {
+        var a = new TransportGraph.Node(0,0,0);
+        assertTrue(a.compareTo(new TransportGraph.Node(1,0,0)) < 0);
+        assertTrue(a.compareTo(new TransportGraph.Node(0,1,0)) < 0);
+        assertTrue(a.compareTo(new TransportGraph.Node(0,0,1)) < 0);
+        assertTrue(new TransportGraph.Node(0,0,1).compareTo(a) > 0);
+        assertEquals(0,a.compareTo(a));
+    }
+
+    @Test void removesStaleDijkstraEntriesAndResolvesEqualLengthTies() {
+        var g=new TransportGraph();
+        var a=new TransportGraph.Node(0,0,0);
+        var b=new TransportGraph.Node(1,0,0);
+        var c=new TransportGraph.Node(0,0,1);
+        var d=new TransportGraph.Node(2,0,0);
+        g.connect(a,b,10);
+        g.connect(a,c,1);
+        g.connect(c,b,1); // expensive entry for b becomes stale
+        g.connect(b,d,1);
+        g.addEndpoint(new TransportGraph.Endpoint(d,d,"goal"));
+        assertEquals(List.of(a,c,b,d),g.route(a,"goal",TransportGraphTest::matches).orElseThrow().nodes());
+
+        var tie=new TransportGraph();
+        tie.connect(a,b,1);
+        tie.connect(a,c,1);
+        tie.addEndpoint(new TransportGraph.Endpoint(b,b,"goal"));
+        tie.addEndpoint(new TransportGraph.Endpoint(c,c,"goal"));
+        assertEquals(c,tie.route(a,"goal",TransportGraphTest::matches).orElseThrow().endpoint().port());
+    }
+
+    @Test void invalidEmptyRouteAndNanDistanceAreRejected() {
+        var ep=new TransportGraph.Endpoint(A,A,"x");
+        assertThrows(IllegalArgumentException.class,()->new TransportGraph.Route(List.of(),ep,0));
+        assertThrows(IllegalArgumentException.class,()->new TransportGraph.Route(List.of(A),ep,Double.NaN));
+    }
+
+    @Test void equalDistancesPreferSmallestPortRegardlessOfRegistrationOrder() {
+        var a=new TransportGraph.Node(0,0,0);
+        var b=new TransportGraph.Node(1,0,0);
+        var c=new TransportGraph.Node(0,0,1);
+        var g=new TransportGraph();
+        g.connect(a,b,1);
+        g.connect(a,c,1);
+        g.addEndpoint(new TransportGraph.Endpoint(c,c,"goal"));
+        g.addEndpoint(new TransportGraph.Endpoint(b,b,"goal"));
+        assertEquals(c,g.route(a,"goal",TransportGraphTest::matches).orElseThrow().endpoint().port());
+        var fail=new TransportGraph();
+        fail.addNode(a);
+        fail.addEndpoint(new TransportGraph.Endpoint(a,a,"goal"));
+        fail.addEndpoint(new TransportGraph.Endpoint(a,a,"goal"));
+        assertEquals(a,fail.route(a,"goal",TransportGraphTest::matches).orElseThrow().endpoint().port());
+    }
+
+    @Test void invalidOverflowCostDoesNotCreateImpossibleRoute() {
+        var g=new TransportGraph();
+        g.connect(A,B,Double.MAX_VALUE);
+        g.connect(B,D,Double.MAX_VALUE);
+        g.addEndpoint(new TransportGraph.Endpoint(D,D,"goal"));
+        assertTrue(g.route(A,"goal",TransportGraphTest::matches).isEmpty());
+    }
+
+    @Test void longerMatchingEndpointNeverDisplacesNearest() {
+        var g=new TransportGraph();
+        g.connect(A,C,5);
+        g.connect(A,B,10);
+        g.addEndpoint(new TransportGraph.Endpoint(C,C,"goal"));
+        g.addEndpoint(new TransportGraph.Endpoint(B,B,"goal"));
+        assertEquals(C,g.route(A,"goal",TransportGraphTest::matches).orElseThrow().endpoint().port());
+    }
 }

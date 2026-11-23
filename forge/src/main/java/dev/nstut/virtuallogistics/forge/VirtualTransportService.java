@@ -53,6 +53,7 @@ public final class VirtualTransportService {
         try {
             // The serialized ItemStack, including fluid, fragment and order metadata, is owned by the ledger.
             byte[] cargo = encode(packageToMove.item);
+            if (cargo.length > 2 * 1024 * 1024) return false;
             VirtualLedger.get(level).capture(VirtualLedger.node(origin.getBlockPos()), cargo);
             return true;
         } catch (IOException e) {
@@ -76,6 +77,7 @@ public final class VirtualTransportService {
             VirtualLedger ledger = VirtualLedger.get(level);
             if (ledger.size() == 0) continue;
             long now = level.getGameTime();
+            ledger.restoreEngines(now);
             if (VirtualLogisticsMod.ENABLED.get()) {
                 routePending(level, ledger, now);
             }

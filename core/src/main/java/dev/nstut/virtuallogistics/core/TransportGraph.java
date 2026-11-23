@@ -106,8 +106,8 @@ public final class TransportGraph {
             Double cost = distance.get(endpoint.node());
             if (cost == null) continue;
             double total = cost + endpoint.node().distanceTo(endpoint.port());
-            if (total < best || (Double.compare(total, best) == 0 &&
-                winner != null && endpoint.port().compareTo(winner.port()) < 0)) {
+            if (winner == null || total < best || (Double.compare(total, best) == 0 &&
+                endpoint.port().compareTo(winner.port()) < 0)) {
                 best = total;
                 winner = endpoint;
             }
