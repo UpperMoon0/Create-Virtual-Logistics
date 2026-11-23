@@ -30,7 +30,11 @@ class VirtualTransportEngineTest {
         engine.clock(219,-360);
         assertEquals(0,engine.deliverReady(219,10,20,s->true).delivered());
         engine.clock(220,-360);
-        assertEquals(1,engine.deliverReady(220,10,20,s->true).delivered());
+        assertEquals(0,engine.deliverReady(220,10,20,s->true).delivered());
+        engine.clock(239,360);
+        assertEquals(0,engine.deliverReady(239,10,20,s->true).delivered());
+        engine.clock(240,360);
+        assertEquals(1,engine.deliverReady(240,10,20,s->true).delivered());
     }
 
     @Test void destFullDoesNotDropCargoAndRetryIsBounded() {
