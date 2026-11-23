@@ -33,6 +33,7 @@ public final class VirtualLogisticsCommands {
                 ServerLevel level = ctx.getSource().getLevel();
                 VirtualLedger ledger = VirtualLedger.get(level);
                 int queued = ledger.pending.size();
+                int corrupt = ledger.quarantined.size();
                 int flying = ledger.active.values().stream().mapToInt(e -> e.inFlight()).sum();
                 int waiting = ledger.active.values().stream().mapToInt(e -> e.waiting()).sum();
                 boolean enabled = VirtualLogisticsMod.ENABLED.get();
@@ -40,6 +41,7 @@ public final class VirtualLogisticsCommands {
                     "CVL " + (enabled ? "enabled" : "disabled") +
                     " | total=" + ledger.size() + " pending=" + queued +
                     " in-flight=" + flying + " awaiting storage=" + waiting +
+                    " quarantined=" + corrupt +
                     " | unsafe external insertion=" +
                     VirtualLogisticsMod.ALLOW_UNSAFE_EXTERNAL_INSERTION.get()), false);
                 return ledger.size();
