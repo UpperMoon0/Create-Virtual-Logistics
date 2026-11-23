@@ -370,4 +370,60 @@ public final class VirtualLogisticsGameTests {
         helper.succeed();
     }
 
+
+    @GameTest(template="empty",timeoutTicks=50)
+    public static void realFluidLogisticsCanonicalPackageSurvivesVirtualCapture(GameTestHelper helper) {
+        if (!net.minecraftforge.fml.ModList.get().isLoaded("fluidlogistics")) {
+            // Baseline profile must stay independent of the optional runtime jar;
+            // the separate pinned compatibility profile REQUIRES the mod to load.
+            helper.succeed();
+            return;
+        }
+        BlockPos source = new BlockPos(1,1,1);
+        helper.setBlock(source,AllBlocks.CHAIN_CONVEYOR.getDefaultState());
+        var chain = (ChainConveyorBlockEntity) helper.getBlockEntity(source);
+        var ledger = VirtualLedger.get(helper.getLevel());
+        var previousIds = new java.util.HashSet<>(ledger.pending.keySet());
+        var fluids = java.util.List.of(
+            new net.minecraftforge.fluids.FluidStack(net.minecraft.world.level.material.Fluids.WATER,1000),
+            new net.minecraftforge.fluids.FluidStack(net.minecraft.world.level.material.Fluids.LAVA,1000));
+        int index=0;
+        for(var fluid : fluids) {
+            try {
+                var helperType = Class.forName(
+                    "com.yision.fluidlogistics.content.logistics.fluidPackage.FluidPackageContentHelper");
+                var creator = helperType.getMethod(
+                    "createCanonicalPackage",net.minecraftforge.fluids.FluidStack.class);
+                var unpack = helperType.getMethod(
+                    "getSingleContainedFluid",ItemStack.class);
+                ItemStack box=(ItemStack)creator.invoke(null,fluid);
+                PackageItem.addAddress(box,"0_hno3");
+                PackageItem.setOrder(box,9011,5,true,index,index==fluids.size()-1,null);
+                if(!chain.addLoopingPackage(new ChainConveyorPackage(0,box)))
+                    helper.fail("CVL rejected actual Fluid Logistics fluid package");
+                var latest = ledger.pending.values().stream()
+                    .filter(p -> !previousIds.contains(p.id()))
+                    .reduce((a,b) -> b).orElseThrow();
+                previousIds.add(latest.id());
+                ItemStack restored = ItemStack.of(net.minecraft.nbt.NbtIo.readCompressed(
+                    new java.io.ByteArrayInputStream(latest.cargo())));
+                var actual=(net.minecraftforge.fluids.FluidStack)unpack.invoke(null,restored);
+                helper.assertTrue(actual.isFluidEqual(fluid)
+                    && actual.getAmount()==fluid.getAmount(),
+                    "Actual Fluid Logistics fluid type or amount changed in transit");
+                helper.assertTrue(PackageItem.getOrderId(restored)==9011
+                    && PackageItem.getLinkIndex(restored)==5
+                    && PackageItem.getIndex(restored)==index
+                    && PackageItem.isFinal(restored)==(index==fluids.size()-1),
+                    "Create order/fragment metadata changed in Fluid Logistics package");
+                helper.assertTrue(ItemStack.isSameItemSameTags(box,restored),
+                    "Actual Fluid Logistics item metadata changed");
+            } catch (ReflectiveOperationException | java.io.IOException e) {
+                helper.fail("Real Fluid Logistics codec integration failed: "+e);
+            }
+            index++;
+        }
+        helper.succeed();
+    }
+
 }
