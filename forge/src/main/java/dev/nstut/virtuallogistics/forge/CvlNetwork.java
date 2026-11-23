@@ -33,10 +33,21 @@ public final class CvlNetwork {
     }
 
     public record Sample(List<TransportGraph.Node> route, double progress, double speedPerTick) {
-        public Sample { route = List.copyOf(route); }
+        public Sample {
+            route = List.copyOf(route);
+            if (route.isEmpty() || route.size() > MAX_VISUAL_ROUTE_NODES)
+                throw new IllegalArgumentException("Invalid visual route length");
+            if (!Double.isFinite(progress) || progress < 0
+                || !Double.isFinite(speedPerTick) || speedPerTick < 0)
+                throw new IllegalArgumentException("Invalid visual movement values");
+        }
     }
     public record Visuals(List<Sample> samples) {
-        public Visuals { samples = List.copyOf(samples); }
+        public Visuals {
+            samples = List.copyOf(samples);
+            if (samples.size() > MAX_VISUAL_SAMPLES)
+                throw new IllegalArgumentException("Too many visual proxies");
+        }
     }
 
     private static void encode(Visuals message, FriendlyByteBuf buffer) {
