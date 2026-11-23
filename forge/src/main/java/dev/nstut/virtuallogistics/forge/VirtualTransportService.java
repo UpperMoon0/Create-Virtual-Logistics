@@ -76,7 +76,7 @@ public final class VirtualTransportService {
         try {
             ItemStack cargo = ItemStack.of(NbtIo.readCompressed(
                 new ByteArrayInputStream(bytes),
-                net.minecraft.nbt.NbtAccounter.create(MAX_UNCOMPRESSED_NBT_BYTES)));
+                new net.minecraft.nbt.NbtAccounter(MAX_UNCOMPRESSED_NBT_BYTES)));
             if (cargo.isEmpty() || !PackageItem.isPackage(cargo) || cargo.getCount() != 1)
                 throw new IOException("Shipment no longer contains exactly one Create package");
             return cargo;
