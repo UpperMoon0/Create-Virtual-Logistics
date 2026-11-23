@@ -47,6 +47,9 @@ public final class VirtualTransportEngine {
         .comparingLong(Shipment::retryTick).thenComparing(Shipment::id);
 
     private final Map<UUID, Shipment> shipments = new HashMap<>();
+    // A source may serve 100k packages but only a handful of distinct paths.
+    // Validate active paths per tick without iterating all packages.
+    private final Map<TransportGraph.Route, Integer> routeReferences = new HashMap<>();
     private final PriorityQueue<Shipment> inflight = new PriorityQueue<>(DUE);
     private final PriorityQueue<Shipment> waiting = new PriorityQueue<>(RETRY);
     private double odometer;
@@ -66,6 +69,7 @@ public final class VirtualTransportEngine {
     public void submit(Shipment shipment) {
         if (shipments.containsKey(shipment.id())) throw new IllegalArgumentException("Duplicate shipment ID");
         shipments.put(shipment.id(), shipment);
+        routeReferences.merge(shipment.route(), 1, Integer::sum);
         if (shipment.status() == Status.IN_TRANSIT) inflight.add(shipment);
         else waiting.add(shipment);
     }
@@ -99,6 +103,8 @@ public final class VirtualTransportEngine {
             }
             if (accepted) {
                 shipments.remove(current.id());
+                routeReferences.compute(current.route(), (route, count) ->
+                    count == null || count <= 1 ? null : count - 1);
                 delivered++;
             } else {
                 Shipment retry = new Shipment(current.id(), current.cargo(), current.route(),
@@ -108,6 +114,11 @@ public final class VirtualTransportEngine {
             }
         }
         return new DeliveryReport(processed, delivered);
+    }
+
+    /** Unique authoritative routes, independent of package count. */
+    public Collection<TransportGraph.Route> activeRoutes() {
+        return List.copyOf(routeReferences.keySet());
     }
 
     public int inFlight() { return inflight.size(); }
