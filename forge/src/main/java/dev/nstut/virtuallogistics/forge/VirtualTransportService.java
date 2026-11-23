@@ -41,10 +41,12 @@ public final class VirtualTransportService {
     private static final int MAX_GRAPH_NODES = 8192;
     private static final int PENDING_BUDGET_PER_TICK = 128;
     private static final int RETRY_TICKS = 20;
+    private static final int MAX_CACHED_ADDRESSES_PER_SOURCE = 1024;
     private static final int MAX_CARGO_BYTES = 2 * 1024 * 1024;
     private static final long MAX_UNCOMPRESSED_NBT_BYTES = 8L * 1024 * 1024;
     private static final Map<ServerLevel, Integer> NEXT_SOURCE = new WeakHashMap<>();
-    private record CachedGraph(TransportGraph graph, long expiresTick) {}
+    private record CachedGraph(TransportGraph graph, long expiresTick,
+                               Map<String, Optional<TransportGraph.Route>> routes) {}
     private static final Map<ServerLevel, Map<TransportGraph.Node, CachedGraph>> GRAPHS = new WeakHashMap<>();
 
     private VirtualTransportService() {}
@@ -57,7 +59,18 @@ public final class VirtualTransportService {
             // The serialized ItemStack, including fluid, fragment and order metadata, is owned by the ledger.
             byte[] cargo = encode(packageToMove.item);
             if (cargo.length > MAX_CARGO_BYTES) return false;
-            VirtualLedger.get(level).capture(VirtualLedger.node(origin.getBlockPos()), cargo);
+            var ledger = VirtualLedger.get(level);
+            var source = VirtualLedger.node(origin.getBlockPos());
+            // Capture first, then promote inside the same authoritative SavedData.
+            // A missing/dynamic route never rejects a valid Create package.
+            var id = ledger.capture(source, cargo);
+            try {
+                var match = routeFor(level, source, PackageItem.getAddress(packageToMove.item),
+                    level.getGameTime());
+                match.ifPresent(route -> ledger.promote(id, route, level.getGameTime()));
+            } catch (RuntimeException ignored) {
+                // The parcel remains pending if the loaded routing graph is changing.
+            }
             return true;
         } catch (IOException e) {
             return false; // Keep original Create package if persistence encoding failed.
@@ -222,23 +235,43 @@ public final class VirtualTransportService {
                 iterator.remove();
                 continue;
             }
-            var route = graph(level, item.source(), now).route(item.source(),
-                PackageItem.getAddress(cargo),
-                (requested, filter) -> PackageItem.matchAddress(requested, filter));
+            var route = routeFor(level, item.source(), PackageItem.getAddress(cargo), now);
             if (route.isEmpty()) {
                 deferred.add(item);
                 iterator.remove();
                 continue;
             }
+            // Promotion updates both containers under the same ledger without a
+            // second NBT decode, and preserves original UUID/fragment metadata.
+            // Remove from iteration before invoking the same-ledger promotion.
+            iterator.remove();
             var engine = ledger.engine(item.source(), now);
             engine.submit(new VirtualTransportEngine.Shipment(item.id(), item.cargo(), route.get(),
                 engine.odometer() + route.get().distance(),
                 VirtualTransportEngine.Status.IN_TRANSIT, 0));
-            iterator.remove();
             ledger.setDirty();
         }
         // Rotate unresolved orders after the current slice, providing fairness for later arrivals.
         deferred.forEach(pending -> ledger.pending.put(pending.id(), pending));
+    }
+
+    /**
+     * Hot admission avoids the 128/10-tick deferred route-planning throttle.
+     * One Dijkstra result is cached per physical source and address for at most
+     * 20 ticks. Cache memory is bounded to 1024 addresses per source.
+     * Graph topology and actual powered travel are validated separately.
+     */
+    private static Optional<TransportGraph.Route> routeFor(ServerLevel level,
+        TransportGraph.Node source, String address, long tick) {
+        if (address == null) return Optional.empty();
+        TransportGraph current = graph(level, source, tick);
+        CachedGraph cached = GRAPHS.get(level).get(source);
+        if (cached.routes().containsKey(address)) return cached.routes().get(address);
+        var route = current.route(source, address,
+            (requested, filter) -> PackageItem.matchAddress(requested, filter));
+        if (cached.routes().size() < MAX_CACHED_ADDRESSES_PER_SOURCE)
+            cached.routes().put(address, route);
+        return route;
     }
 
     private static TransportGraph graph(ServerLevel level, TransportGraph.Node source, long tick) {
@@ -282,7 +315,7 @@ public final class VirtualTransportService {
             for (BlockPos offset : conveyor.travelPorts.keySet())
                 registerPort(level, graph, pos, physical.offset(offset));
         }
-        cache.put(source, new CachedGraph(graph,tick + 20));
+        cache.put(source, new CachedGraph(graph,tick + 20, new HashMap<>()));
         return graph;
     }
 
