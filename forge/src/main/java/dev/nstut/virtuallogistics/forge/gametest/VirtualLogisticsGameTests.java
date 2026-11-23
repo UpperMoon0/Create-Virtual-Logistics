@@ -600,7 +600,11 @@ public final class VirtualLogisticsGameTests {
             chain.getBlockPos().getY(),chain.getBlockPos().getZ());
         int beforePending=current.pending.size();
         int beforeFlying=current.engine(sourceNode,helper.getLevel().getGameTime()).inFlight();
-        for(int i=0;i<2_000;i++) {
+        int count = Integer.getInteger("cvl.highVolumePackages", 2_000);
+        helper.assertTrue(count >= 2_000 && count <= 100_000,
+            "Invalid optional high-volume native benchmark count");
+        long admissionStart = System.nanoTime();
+        for(int i=0;i<count;i++) {
             ItemStack cargo=PackageStyles.getDefaultBox();
             PackageItem.addAddress(cargo,"fast-admission");
             if(!chain.addLoopingPackage(new ChainConveyorPackage(0,cargo)))
@@ -608,8 +612,11 @@ public final class VirtualLogisticsGameTests {
         }
         helper.assertTrue(current.pending.size()==beforePending,
             "Known route still throttled in old deferred queue");
-        helper.assertTrue(current.active.get(sourceNode).inFlight()==beforeFlying+2_000,
-            "2k packages not immediately admitted to physical-time flight");
+        long elapsedNanos = System.nanoTime() - admissionStart;
+        System.out.printf("CVL native admission: %d packages, %.3f ms, %.0f packages/s%n",
+            count, elapsedNanos/1e6, count/(elapsedNanos/1e9));
+        helper.assertTrue(current.active.get(sourceNode).inFlight()==beforeFlying+count,
+            "Packages not immediately admitted to physical-time flight");
         helper.assertTrue(chain.getLoopingPackages().isEmpty(),
             "Real Create package list grew under virtual load");
         helper.succeed();
