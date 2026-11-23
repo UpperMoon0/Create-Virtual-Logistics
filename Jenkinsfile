@@ -39,13 +39,18 @@ pipeline {
         }
         stage('Native Forge GameTests (release gate)') {
             when { expression { return params.RUN_NATIVE_GAMETESTS } }
-            steps { sh './gradlew :forge:runGameTestServer --no-daemon --console=plain --max-workers=1' }
+            steps { sh './gradlew -PnativeCoverage=true :forge:runGameTestServer --no-daemon --console=plain --max-workers=1' }
             post { always { archiveArtifacts artifacts: 'forge/run-gametest/logs/*.log', allowEmptyArchive: true } }
         }
         stage('Fluid Logistics 1.3.2 native coexistence') {
             when { expression { return params.RUN_NATIVE_GAMETESTS } }
-            steps { sh './gradlew -PwithFluidLogistics=true :forge:runGameTestServer --no-daemon --console=plain --max-workers=1' }
+            steps { sh './gradlew -PnativeCoverage=true -PwithFluidLogistics=true :forge:runGameTestServer --no-daemon --console=plain --max-workers=1' }
             post { always { archiveArtifacts artifacts: 'forge/run-gametest-fluid/logs/*.log', allowEmptyArchive: true } }
+        }
+        stage('Forge adapter native coverage') {
+            when { expression { return params.RUN_NATIVE_GAMETESTS } }
+            steps { sh './gradlew :forge:nativeForgeCoverageReport --no-daemon --console=plain --max-workers=1' }
+            post { always { archiveArtifacts artifacts: 'forge/build/reports/jacoco/nativeForgeCoverageReport/**,forge/build/jacoco/forge-*.exec', allowEmptyArchive: true } }
         }
     }
     post {
